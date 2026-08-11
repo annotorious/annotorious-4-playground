@@ -3,7 +3,17 @@ import type { SnappingProvider } from './snapping';
 
 export interface EditorContext<S extends SpatialShape = SpatialShape> {
 
+  /** Screen (pointer event) coordinates -> the shape's local coordinate space. **/
   toLocalCoordinates(event: PointerEvent): [number, number];
+
+  /**
+   * The inverse: local coordinate space -> current screen pixels. Editors
+   * use this to position and size handles in *constant screen pixels*
+   * regardless of zoom - a resize handle should stay a fixed, comfortable
+   * touch/click target on screen, not shrink to nothing when zoomed out or
+   * balloon to an unusable size when zoomed in.
+   */
+  toScreenCoordinates(point: [number, number]): [number, number];
 
   snapping?: SnappingProvider;
 
@@ -27,7 +37,11 @@ export interface ShapeEditor<S extends SpatialShape = SpatialShape> {
 
   mount(container: HTMLElement, shape: S): void;
 
-  /** Reflects a new shape state (e.g. after an external/programmatic change) without remounting. **/
+  /**
+   * Recomputes and re-renders. Call this whenever the shape changes *or*
+   * whenever the viewport (pan/zoom) changes - screen positions depend on
+   * both, and this is the only hook the host has to ask for a refresh.
+   */
   update(shape: S): void;
 
   destroy(): void;

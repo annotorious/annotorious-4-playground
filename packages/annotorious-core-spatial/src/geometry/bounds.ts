@@ -1,7 +1,9 @@
 import type { Bounds, BoxGeometry, PointGeometry, PolygonGeometry } from './types';
 
-/** The four corners of a (possibly rotated) box, in world space. **/
-export const boxCorners = (geom: BoxGeometry): [number, number][] => {
+export type Corners = [[number, number], [number, number], [number, number], [number, number]];
+
+/** The four corners of a (possibly rotated) box, in world space - always [nw, ne, se, sw]. **/
+export const boxCorners = (geom: BoxGeometry): Corners => {
   const { x, y, w, h, rot } = geom;
 
   if (!rot)

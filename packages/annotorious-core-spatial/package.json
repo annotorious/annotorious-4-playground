@@ -38,13 +38,18 @@
   },
   "devDependencies": {
     "@types/rbush": "^4.0.0",
+    "jsdom": "^30.0.1",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vite-plugin-dts": "^5.0.2",
+    "vite-plugin-solid": "^2.11.14",
     "vitest": "^4.1.8"
   },
   "dependencies": {
     "@annotorious/core": "*",
-    "rbush": "^4.0.1"
+    "@deck.gl/core": "^9.3.9",
+    "@deck.gl/layers": "^9.3.9",
+    "rbush": "^4.0.1",
+    "solid-js": "^1.9.14"
   }
 }

@@ -1,8 +1,10 @@
 import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
+import solid from 'vite-plugin-solid';
 
 export default defineConfig({
   plugins: [
+    solid(),
     dts({ tsconfigPath: './tsconfig.json' })
   ],
   build: {
@@ -12,7 +14,14 @@ export default defineConfig({
       fileName: (format) => `index.${format === 'es' ? 'mjs' : 'cjs'}`,
     },
     rollupOptions: {
-      external: ['@annotorious/core', 'rbush'],
+      // solid-js is NOT external - it's bundled directly into our output so
+      // every consumer gets their own private copy of the Solid runtime,
+      // fully isolated from any Solid version a host app might use itself.
+      // @deck.gl/* MUST stay external, for the opposite reason: deck.gl
+      // Layer instances have to come from the exact same module instance as
+      // the host's Deck renderer (it does instanceof-based diffing
+      // internally) - a bundled private copy would silently fail to render.
+      external: ['@annotorious/core', 'rbush', '@deck.gl/core', '@deck.gl/layers'],
     },
     sourcemap: true,
     target: 'es2022',

@@ -1,0 +1,20 @@
+{
+  "name": "annotorious4-openseadragon",
+  "version": "4.0.0-alpha.0",
+  "description": "Annotorious v4 for OpenSeadragon",
+  "author": "Rainer Simon",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "scripts": {
+    "start": "vite"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^9.3.9",
+    "@deck.gl/layers": "^9.3.9",
+    "openseadragon": "^6.0.2"
+  }
+}

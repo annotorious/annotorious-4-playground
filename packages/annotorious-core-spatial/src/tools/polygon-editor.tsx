@@ -2,27 +2,36 @@ import { createSignal, For } from 'solid-js';
 import { render } from 'solid-js/web';
 import { createPolygon } from '../geometry';
 import type { Polygon } from '../geometry';
-import type { EditorContext, ShapeEditor, ShapeEditorFactory } from './shape-editor';
+import type { EditorContext, EditorTransform, ShapeEditor, ShapeEditorFactory } from './shape-editor';
 
 const HANDLE_SIZE = 8; // constant screen pixels
+const BORDER_WIDTH = 2; // constant screen pixels
 const NUDGE = 1; // local units per arrow-key press
 const MIN_VERTICES = 3;
 
-const handleStyle = (screenPos: [number, number]): Record<string, string> => ({
-  position: 'absolute',
-  left: `${screenPos[0] - HANDLE_SIZE / 2}px`,
-  top: `${screenPos[1] - HANDLE_SIZE / 2}px`,
-  width: `${HANDLE_SIZE}px`,
-  height: `${HANDLE_SIZE}px`,
-  'pointer-events': 'auto',
-  cursor: 'pointer',
-  background: '#fff',
-  border: '2px solid #1a73e8',
-  'border-radius': '50%',
-  'box-sizing': 'border-box'
-});
+// See box-editor.tsx's handleStyle doc - every spatial dimension is in
+// local units, divided by scale, so the ambient container transform alone
+// produces a constant on-screen size.
+const handleStyle = (localPos: [number, number], scale: number): Record<string, string> => {
+  const size = HANDLE_SIZE / scale;
+  const border = BORDER_WIDTH / scale;
 
-const PolygonHandles = (props: { shape: () => Polygon, ctx: EditorContext<Polygon> }) => {
+  return {
+    position: 'absolute',
+    left: `${localPos[0] - size / 2}px`,
+    top: `${localPos[1] - size / 2}px`,
+    width: `${size}px`,
+    height: `${size}px`,
+    'pointer-events': 'auto',
+    cursor: 'pointer',
+    background: '#fff',
+    border: `${border}px solid #1a73e8`,
+    'border-radius': '50%',
+    'box-sizing': 'border-box'
+  };
+}
+
+const PolygonHandles = (props: { shape: () => Polygon, transform: () => EditorTransform, ctx: EditorContext<Polygon> }) => {
   const { ctx } = props;
 
   const withPoint = (index: number, point: [number, number]) => {
@@ -37,7 +46,9 @@ const PolygonHandles = (props: { shape: () => Polygon, ctx: EditorContext<Polygo
   }
 
   const startVertexDrag = (index: number) => (downEvent: PointerEvent) => {
-    downEvent.stopPropagation();
+    // No stopPropagation() - see box-editor.tsx's startCornerDrag doc.
+    ctx.onDragStart?.();
+
     const target = downEvent.currentTarget as HTMLElement;
     target.setPointerCapture(downEvent.pointerId);
 
@@ -51,6 +62,7 @@ const PolygonHandles = (props: { shape: () => Polygon, ctx: EditorContext<Polygo
       target.releasePointerCapture(upEvent.pointerId);
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
+      ctx.onDragEnd?.();
     }
 
     target.addEventListener('pointermove', onMove);
@@ -83,7 +95,7 @@ const PolygonHandles = (props: { shape: () => Polygon, ctx: EditorContext<Polygo
           role="button"
           tabIndex={0}
           aria-label={`Polygon vertex ${index() + 1} of ${props.shape().geometry.points.length}`}
-          style={handleStyle(ctx.toScreenCoordinates(point))}
+          style={handleStyle(point, props.transform().scale)}
           onPointerDown={startVertexDrag(index())}
           onKeyDown={onVertexKeyDown(index())}
         />
@@ -94,18 +106,36 @@ const PolygonHandles = (props: { shape: () => Polygon, ctx: EditorContext<Polygo
 
 export const createPolygonEditor: ShapeEditorFactory<Polygon> = (ctx: EditorContext<Polygon>): ShapeEditor<Polygon> => {
   let dispose: (() => void) | undefined;
+  let containerEl: HTMLElement | undefined;
+
   const [shape, setShape] = createSignal<Polygon>(createPolygon([[0, 0], [0, 0], [0, 0]]));
+  const [transform, setTransform] = createSignal<EditorTransform>({ scale: 1, offsetX: 0, offsetY: 0 }, { equals: false });
 
-  const mount = (container: HTMLElement, initial: Polygon) => {
-    setShape(initial);
-    container.style.position = 'absolute';
-    container.style.inset = '0';
-    container.style.pointerEvents = 'none';
-
-    dispose = render(() => <PolygonHandles shape={shape} ctx={ctx} />, container);
+  const applyContainerTransform = (t: EditorTransform) => {
+    if (!containerEl) return;
+    containerEl.style.transform = `translate(${t.offsetX}px, ${t.offsetY}px) scale(${t.scale})`;
   }
 
-  const update = (updated: Polygon) => setShape(updated);
+  const mount = (container: HTMLElement, initial: Polygon, initialTransform: EditorTransform) => {
+    containerEl = container;
+    container.style.position = 'absolute';
+    container.style.left = '0';
+    container.style.top = '0';
+    container.style.transformOrigin = '0 0';
+    container.style.pointerEvents = 'none';
+
+    setShape(initial);
+    setTransform(initialTransform);
+    applyContainerTransform(initialTransform);
+
+    dispose = render(() => <PolygonHandles shape={shape} transform={transform} ctx={ctx} />, container);
+  }
+
+  const update = (updated: Polygon, updatedTransform: EditorTransform) => {
+    applyContainerTransform(updatedTransform);
+    setTransform(updatedTransform);
+    setShape(updated);
+  }
 
   const destroy = () => dispose?.();
 

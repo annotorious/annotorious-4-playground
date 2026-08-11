@@ -5,9 +5,10 @@ import type { EditorContext } from '../src/tools/shape-editor';
 
 // A trivial 1:1 identity transform - screen space === local space - so
 // expectations can be written directly in local units.
+const IDENTITY = { scale: 1, offsetX: 0, offsetY: 0 };
+
 const makeContext = () => ({
   toLocalCoordinates: (event: PointerEvent) => [event.clientX, event.clientY] as [number, number],
-  toScreenCoordinates: (point: [number, number]) => point,
   onChange: vi.fn()
 }) satisfies EditorContext<any>;
 
@@ -24,15 +25,16 @@ afterEach(() => {
 
 describe('box editor', () => {
 
-  it('mounts 4 corner handles and a rotate handle, with ARIA labels', () => {
+  it('mounts a move handle, 4 corner handles and a rotate handle, with ARIA labels', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(0, 0, 100, 100));
+    editor.mount(container, createBox(0, 0, 100, 100), IDENTITY);
 
     const handles = container.querySelectorAll('[role="button"]');
-    expect(handles).toHaveLength(5);
+    expect(handles).toHaveLength(6);
 
     const labels = [...handles].map(h => h.getAttribute('aria-label'));
+    expect(labels).toContain('Move shape');
     expect(labels).toContain('Resize handle, top-left corner');
     expect(labels).toContain('Resize handle, top-right corner');
     expect(labels).toContain('Resize handle, bottom-right corner');
@@ -45,7 +47,7 @@ describe('box editor', () => {
   it('positions the se handle at the box\'s bottom-right corner', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(10, 20, 100, 50));
+    editor.mount(container, createBox(10, 20, 100, 50), IDENTITY);
 
     const se = [...container.querySelectorAll('[role="button"]')]
       .find(h => h.getAttribute('aria-label') === 'Resize handle, bottom-right corner') as HTMLElement;
@@ -60,7 +62,7 @@ describe('box editor', () => {
   it('resizes on drag: pointerdown on a corner, pointermove, pointerup', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(0, 0, 100, 100));
+    editor.mount(container, createBox(0, 0, 100, 100), IDENTITY);
 
     const se = [...container.querySelectorAll('[role="button"]')]
       .find(h => h.getAttribute('aria-label') === 'Resize handle, bottom-right corner') as HTMLElement;
@@ -81,10 +83,32 @@ describe('box editor', () => {
     editor.destroy();
   });
 
+  it('moves on drag of the body, keeping size and rotation', () => {
+    const ctx = makeContext();
+    const editor = createBoxEditor(ctx);
+    editor.mount(container, createBox(10, 10, 100, 50, 0.3), IDENTITY);
+
+    const body = [...container.querySelectorAll('[role="button"]')]
+      .find(h => h.getAttribute('aria-label') === 'Move shape') as HTMLElement;
+
+    body.setPointerCapture = vi.fn();
+    body.releasePointerCapture = vi.fn();
+
+    body.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: 50, clientY: 50, bubbles: true }));
+    body.dispatchEvent(new PointerEvent('pointermove', { pointerId: 1, clientX: 65, clientY: 40, bubbles: true }));
+
+    expect(ctx.onChange).toHaveBeenCalledWith(expect.objectContaining({
+      geometry: expect.objectContaining({ x: 25, y: 0, w: 100, h: 50, rot: 0.3 })
+    }));
+
+    body.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 65, clientY: 40, bubbles: true }));
+    editor.destroy();
+  });
+
   it('nudges a corner with arrow keys', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(0, 0, 100, 100));
+    editor.mount(container, createBox(0, 0, 100, 100), IDENTITY);
 
     const se = [...container.querySelectorAll('[role="button"]')]
       .find(h => h.getAttribute('aria-label') === 'Resize handle, bottom-right corner') as HTMLElement;
@@ -101,7 +125,7 @@ describe('box editor', () => {
   it('rotates on drag of the rotate handle', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(0, 0, 100, 100));
+    editor.mount(container, createBox(0, 0, 100, 100), IDENTITY);
 
     const rotate = [...container.querySelectorAll('[role="button"]')]
       .find(h => h.getAttribute('aria-label') === 'Rotate handle') as HTMLElement;
@@ -122,8 +146,8 @@ describe('box editor', () => {
   it('removes all handles on destroy', () => {
     const ctx = makeContext();
     const editor = createBoxEditor(ctx);
-    editor.mount(container, createBox(0, 0, 100, 100));
-    expect(container.querySelectorAll('[role="button"]')).toHaveLength(5);
+    editor.mount(container, createBox(0, 0, 100, 100), IDENTITY);
+    expect(container.querySelectorAll('[role="button"]')).toHaveLength(6);
 
     editor.destroy();
     expect(container.querySelectorAll('[role="button"]')).toHaveLength(0);

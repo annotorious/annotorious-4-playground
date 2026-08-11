@@ -3,9 +3,10 @@ import { createPoint } from '../src/geometry';
 import { createPointEditor } from '../src/tools/point-editor';
 import type { EditorContext } from '../src/tools/shape-editor';
 
+const IDENTITY = { scale: 1, offsetX: 0, offsetY: 0 };
+
 const makeContext = () => ({
   toLocalCoordinates: (event: PointerEvent) => [event.clientX, event.clientY] as [number, number],
-  toScreenCoordinates: (point: [number, number]) => point,
   onChange: vi.fn()
 }) satisfies EditorContext<any>;
 
@@ -23,7 +24,7 @@ describe('point editor', () => {
   it('mounts a single draggable handle at the point', () => {
     const ctx = makeContext();
     const editor = createPointEditor(ctx);
-    editor.mount(container, createPoint(10, 10));
+    editor.mount(container, createPoint(10, 10), IDENTITY);
 
     const handle = container.querySelector('[role="button"]') as HTMLElement;
     expect(handle).toBeTruthy();
@@ -35,7 +36,7 @@ describe('point editor', () => {
   it('moves on drag', () => {
     const ctx = makeContext();
     const editor = createPointEditor(ctx);
-    editor.mount(container, createPoint(10, 10));
+    editor.mount(container, createPoint(10, 10), IDENTITY);
 
     const handle = container.querySelector('[role="button"]') as HTMLElement;
     handle.setPointerCapture = vi.fn();
@@ -54,7 +55,7 @@ describe('point editor', () => {
   it('nudges with arrow keys', () => {
     const ctx = makeContext();
     const editor = createPointEditor(ctx);
-    editor.mount(container, createPoint(10, 10));
+    editor.mount(container, createPoint(10, 10), IDENTITY);
 
     const handle = container.querySelector('[role="button"]') as HTMLElement;
     handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));

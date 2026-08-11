@@ -3,9 +3,10 @@ import { createPolygon } from '../src/geometry';
 import { createPolygonEditor } from '../src/tools/polygon-editor';
 import type { EditorContext } from '../src/tools/shape-editor';
 
+const IDENTITY = { scale: 1, offsetX: 0, offsetY: 0 };
+
 const makeContext = () => ({
   toLocalCoordinates: (event: PointerEvent) => [event.clientX, event.clientY] as [number, number],
-  toScreenCoordinates: (point: [number, number]) => point,
   onChange: vi.fn()
 }) satisfies EditorContext<any>;
 
@@ -23,7 +24,7 @@ describe('polygon editor', () => {
   it('mounts one handle per vertex', () => {
     const ctx = makeContext();
     const editor = createPolygonEditor(ctx);
-    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]));
+    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]), IDENTITY);
 
     const handles = container.querySelectorAll('[role="button"]');
     expect(handles).toHaveLength(3);
@@ -35,7 +36,7 @@ describe('polygon editor', () => {
   it('drags a vertex to a new position', () => {
     const ctx = makeContext();
     const editor = createPolygonEditor(ctx);
-    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]));
+    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]), IDENTITY);
 
     const first = container.querySelectorAll('[role="button"]')[0] as HTMLElement;
     first.setPointerCapture = vi.fn();
@@ -54,7 +55,7 @@ describe('polygon editor', () => {
   it('refuses to drop below 3 vertices via Delete', () => {
     const ctx = makeContext();
     const editor = createPolygonEditor(ctx);
-    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]));
+    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100]]), IDENTITY);
 
     const first = container.querySelectorAll('[role="button"]')[0] as HTMLElement;
     first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));
@@ -66,7 +67,7 @@ describe('polygon editor', () => {
   it('removes a vertex via Delete when above the minimum', () => {
     const ctx = makeContext();
     const editor = createPolygonEditor(ctx);
-    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100], [0, 100]]));
+    editor.mount(container, createPolygon([[0, 0], [100, 0], [50, 100], [0, 100]]), IDENTITY);
 
     const first = container.querySelectorAll('[role="button"]')[0] as HTMLElement;
     first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }));

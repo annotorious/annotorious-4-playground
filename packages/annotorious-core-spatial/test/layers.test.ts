@@ -10,34 +10,31 @@ const target = (id: string, selector: SpatialAnnotationTarget['selector']): Spat
   selector
 });
 
+const VIEWPORT = { bounds: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 }, resolution: 1 };
+
 describe('buildAnnotationLayers', () => {
 
   it('produces only a PolygonLayer when everything is full-size', () => {
-    const index = createAnnotationIndex();
-    index.insert(target('a', createBox(0, 0, 100, 100)));
-
-    const layers = buildAnnotationLayers(index, { bounds: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 }, resolution: 1 });
+    const layers = buildAnnotationLayers([target('a', createBox(0, 0, 100, 100))], VIEWPORT);
 
     expect(layers).toHaveLength(1);
     expect(layers[0]).toBeInstanceOf(PolygonLayer);
   });
 
   it('produces only a ScatterplotLayer for points', () => {
-    const index = createAnnotationIndex();
-    index.insert(target('a', createPoint(5, 5)));
-
-    const layers = buildAnnotationLayers(index, { bounds: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 }, resolution: 1 });
+    const layers = buildAnnotationLayers([target('a', createPoint(5, 5))], VIEWPORT);
 
     expect(layers).toHaveLength(1);
     expect(layers[0]).toBeInstanceOf(ScatterplotLayer);
   });
 
   it('splits full-size and simplified shapes into separate layers', () => {
-    const index = createAnnotationIndex();
-    index.insert(target('big', createBox(0, 0, 1000, 1000))); // clearly "full" at resolution 1
-    index.insert(target('tiny', createBox(2000, 2000, 2, 2))); // below simplifyBelowPx at resolution 1
+    const candidates = [
+      target('big', createBox(0, 0, 1000, 1000)), // clearly "full" at resolution 1
+      target('tiny', createBox(2000, 2000, 2, 2)) // below simplifyBelowPx at resolution 1
+    ];
 
-    const layers = buildAnnotationLayers(index, { bounds: { minX: -1000, minY: -1000, maxX: 3000, maxY: 3000 }, resolution: 1 });
+    const layers = buildAnnotationLayers(candidates, { bounds: { minX: -1000, minY: -1000, maxX: 3000, maxY: 3000 }, resolution: 1 });
 
     expect(layers).toHaveLength(2);
     expect(layers.some(l => l instanceof PolygonLayer)).toBe(true);
@@ -45,34 +42,29 @@ describe('buildAnnotationLayers', () => {
   });
 
   it('culls sub-pixel shapes entirely', () => {
-    const index = createAnnotationIndex();
-    index.insert(target('sub-pixel', createBox(0, 0, 0.1, 0.1)));
-
-    const layers = buildAnnotationLayers(index, { bounds: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 }, resolution: 1 });
-
+    const layers = buildAnnotationLayers([target('sub-pixel', createBox(0, 0, 0.1, 0.1))], VIEWPORT);
     expect(layers).toHaveLength(0);
   });
 
-  it('excludes shapes outside the viewport bounds', () => {
+  it('is agnostic to how candidates were gathered - works directly off an index query too', () => {
     const index = createAnnotationIndex();
+    index.insert(target('in-view', createBox(0, 0, 100, 100)));
     index.insert(target('far-away', createBox(10000, 10000, 100, 100)));
 
-    const layers = buildAnnotationLayers(index, { bounds: { minX: 0, minY: 0, maxX: 100, maxY: 100 }, resolution: 1 });
+    const viewport = { bounds: { minX: 0, minY: 0, maxX: 100, maxY: 100 }, resolution: 1 };
+    const layers = buildAnnotationLayers(index.getIntersecting(viewport.bounds), viewport);
 
-    expect(layers).toHaveLength(0);
+    expect(layers).toHaveLength(1);
+    expect((layers[0] as PolygonLayer<SpatialAnnotationTarget>).props.data).toHaveLength(1);
   });
 
   it('applies per-target styling via getStyle', () => {
-    const index = createAnnotationIndex();
-    index.insert(target('a', createBox(0, 0, 100, 100)));
-
-    const layers = buildAnnotationLayers(index, { bounds: { minX: -100, minY: -100, maxX: 100, maxY: 100 }, resolution: 1 }, {
-      getStyle: () => ({ fillColor: [1, 2, 3, 4] })
-    });
+    const t = target('a', createBox(0, 0, 100, 100));
+    const layers = buildAnnotationLayers([t], VIEWPORT, { getStyle: () => ({ fillColor: [1, 2, 3, 4] }) });
 
     const layer = layers[0] as PolygonLayer<SpatialAnnotationTarget>;
     // @ts-expect-error - accessing internal props for test purposes
-    expect(layer.props.getFillColor(index.all()[0])).toEqual([1, 2, 3, 4]);
+    expect(layer.props.getFillColor(t)).toEqual([1, 2, 3, 4]);
   });
 
 });

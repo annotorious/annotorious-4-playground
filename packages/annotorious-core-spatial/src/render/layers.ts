@@ -1,6 +1,5 @@
 import type { Layer } from '@deck.gl/core';
 import { PolygonLayer, ScatterplotLayer } from '@deck.gl/layers';
-import type { AnnotationIndex } from '../annotation-index';
 import { boxCorners, ShapeType } from '../geometry';
 import type { SpatialShape } from '../geometry';
 import type { SpatialAnnotationTarget } from '../model';
@@ -58,27 +57,33 @@ const shapeCentroid = (shape: SpatialShape): [number, number] => {
 }
 
 /**
- * Builds the deck.gl layers for whatever's currently visible, applying
- * viewport culling (via the spatial index) and the point/cull LOD
- * simplification - the MVP-tier scaling strategy. Both layers are
- * `pickable: false`: hit-testing goes through the spatial index (see
+ * Builds the deck.gl layers for a given set of candidate targets - typically
+ * whatever a spatial index's `getIntersecting(viewport.bounds)` returned, but
+ * deliberately decoupled from any particular index: a multi-image
+ * OpenSeadragon world needs to gather candidates from several per-image
+ * indexes and merge them (each transformed into shared world space) before
+ * they get here, which a single index reference couldn't express. For the
+ * common single-coordinate-space case (OpenLayers, single-image
+ * OpenSeadragon), that's just `buildAnnotationLayers(index.getIntersecting(viewport.bounds), viewport)`.
+ *
+ * Applies the point/cull LOD simplification on top of whatever candidates
+ * it's given - the MVP-tier scaling strategy. Both layers are
+ * `pickable: false`: hit-testing goes through a spatial index (see
  * `AnnotationIndex.getAt`) against actual geometry, not GPU color picking,
  * which stays precise and fast at very large annotation counts where GPU
  * picking degrades.
  *
  * Call this again whenever the viewport changes (pan/zoom) or the
- * underlying annotation data changes - it always reflects a fresh query
- * against the index, there's no persistent state to invalidate.
+ * underlying annotation data changes - there's no persistent state to
+ * invalidate, it always reflects exactly the candidates it's given.
  */
 export const buildAnnotationLayers = <T extends SpatialAnnotationTarget>(
-  index: AnnotationIndex<T>,
+  candidates: T[],
   viewport: RenderViewport,
   opts: BuildLayersOptions<T> = {}
 ): Layer[] => {
   const idPrefix = opts.idPrefix ? `${opts.idPrefix}-` : '';
   const pointRadiusMinPixels = opts.pointRadiusMinPixels ?? 4;
-
-  const candidates = index.getIntersecting(viewport.bounds);
 
   const full: T[] = [];
   const simplified: T[] = [];

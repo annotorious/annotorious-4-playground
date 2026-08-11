@@ -21,7 +21,9 @@ export default defineConfig({
       // Layer instances have to come from the exact same module instance as
       // the host's Deck renderer (it does instanceof-based diffing
       // internally) - a bundled private copy would silently fail to render.
-      external: ['@annotorious/core', 'rbush', '@deck.gl/core', '@deck.gl/layers'],
+      // nanostores stays external too, matching @annotorious/core's own
+      // treatment - same package, one shared copy via normal npm dedup.
+      external: ['@annotorious/core', 'rbush', 'nanostores', '@deck.gl/core', '@deck.gl/layers', '@deck.gl/extensions'],
     },
     sourcemap: true,
     target: 'es2022',

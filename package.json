@@ -13,6 +13,7 @@
   },
   "workspaces": [
     "./packages/annotorious-core",
-    "./packages/annotorious-core-spatial"
+    "./packages/annotorious-core-spatial",
+    "./packages/annotorious-openseadragon"
   ]
 }

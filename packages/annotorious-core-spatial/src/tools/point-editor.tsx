@@ -2,16 +2,19 @@ import { createSignal } from 'solid-js';
 import { render } from 'solid-js/web';
 import { createPoint } from '../geometry';
 import type { Point } from '../geometry';
-import type { EditorContext, ShapeEditor, ShapeEditorFactory } from './shape-editor';
+import type { EditorContext, EditorTransform, ShapeEditor, ShapeEditorFactory } from './shape-editor';
 
 const HANDLE_SIZE = 12; // constant screen pixels
+const BORDER_WIDTH = 2; // constant screen pixels
 const NUDGE = 1; // local units per arrow-key press
 
-const PointHandle = (props: { shape: () => Point, ctx: EditorContext<Point> }) => {
+const PointHandle = (props: { shape: () => Point, transform: () => EditorTransform, ctx: EditorContext<Point> }) => {
   const { ctx } = props;
 
   const startDrag = (downEvent: PointerEvent) => {
-    downEvent.stopPropagation();
+    // No stopPropagation() - see box-editor.tsx's startCornerDrag doc.
+    ctx.onDragStart?.();
+
     const target = downEvent.currentTarget as HTMLElement;
     target.setPointerCapture(downEvent.pointerId);
 
@@ -25,6 +28,7 @@ const PointHandle = (props: { shape: () => Point, ctx: EditorContext<Point> }) =
       target.releasePointerCapture(upEvent.pointerId);
       target.removeEventListener('pointermove', onMove);
       target.removeEventListener('pointerup', onUp);
+      ctx.onDragEnd?.();
     }
 
     target.addEventListener('pointermove', onMove);
@@ -44,26 +48,34 @@ const PointHandle = (props: { shape: () => Point, ctx: EditorContext<Point> }) =
     ctx.onChange(createPoint(x + d[0], y + d[1]));
   }
 
-  const screenPos = () => ctx.toScreenCoordinates([props.shape().geometry.x, props.shape().geometry.y]);
+  // See box-editor.tsx's handleStyle doc - local units divided by scale.
+  const style = (): Record<string, string> => {
+    const scale = props.transform().scale;
+    const size = HANDLE_SIZE / scale;
+    const border = BORDER_WIDTH / scale;
+    const { x, y } = props.shape().geometry;
+
+    return {
+      position: 'absolute',
+      left: `${x - size / 2}px`,
+      top: `${y - size / 2}px`,
+      width: `${size}px`,
+      height: `${size}px`,
+      'pointer-events': 'auto',
+      cursor: 'move',
+      background: '#fff',
+      border: `${border}px solid #1a73e8`,
+      'border-radius': '50%',
+      'box-sizing': 'border-box'
+    };
+  }
 
   return (
     <div
       role="button"
       tabIndex={0}
       aria-label="Point annotation - drag or use arrow keys to move"
-      style={{
-        position: 'absolute',
-        left: `${screenPos()[0] - HANDLE_SIZE / 2}px`,
-        top: `${screenPos()[1] - HANDLE_SIZE / 2}px`,
-        width: `${HANDLE_SIZE}px`,
-        height: `${HANDLE_SIZE}px`,
-        'pointer-events': 'auto',
-        cursor: 'move',
-        background: '#fff',
-        border: '2px solid #1a73e8',
-        'border-radius': '50%',
-        'box-sizing': 'border-box'
-      }}
+      style={style()}
       onPointerDown={startDrag}
       onKeyDown={onKeyDown}
     />
@@ -72,18 +84,36 @@ const PointHandle = (props: { shape: () => Point, ctx: EditorContext<Point> }) =
 
 export const createPointEditor: ShapeEditorFactory<Point> = (ctx: EditorContext<Point>): ShapeEditor<Point> => {
   let dispose: (() => void) | undefined;
+  let containerEl: HTMLElement | undefined;
+
   const [shape, setShape] = createSignal<Point>(createPoint(0, 0));
+  const [transform, setTransform] = createSignal<EditorTransform>({ scale: 1, offsetX: 0, offsetY: 0 }, { equals: false });
 
-  const mount = (container: HTMLElement, initial: Point) => {
-    setShape(initial);
-    container.style.position = 'absolute';
-    container.style.inset = '0';
-    container.style.pointerEvents = 'none';
-
-    dispose = render(() => <PointHandle shape={shape} ctx={ctx} />, container);
+  const applyContainerTransform = (t: EditorTransform) => {
+    if (!containerEl) return;
+    containerEl.style.transform = `translate(${t.offsetX}px, ${t.offsetY}px) scale(${t.scale})`;
   }
 
-  const update = (updated: Point) => setShape(updated);
+  const mount = (container: HTMLElement, initial: Point, initialTransform: EditorTransform) => {
+    containerEl = container;
+    container.style.position = 'absolute';
+    container.style.left = '0';
+    container.style.top = '0';
+    container.style.transformOrigin = '0 0';
+    container.style.pointerEvents = 'none';
+
+    setShape(initial);
+    setTransform(initialTransform);
+    applyContainerTransform(initialTransform);
+
+    dispose = render(() => <PointHandle shape={shape} transform={transform} ctx={ctx} />, container);
+  }
+
+  const update = (updated: Point, updatedTransform: EditorTransform) => {
+    applyContainerTransform(updatedTransform);
+    setTransform(updatedTransform);
+    setShape(updated);
+  }
 
   const destroy = () => dispose?.();
 

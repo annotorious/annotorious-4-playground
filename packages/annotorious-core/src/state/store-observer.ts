@@ -1,0 +1,197 @@
+import type { Annotation } from '../model';
+import { diffAnnotations } from '../utils';
+
+/** Interface for listening to changes in the annotation store **/
+export interface StoreObserver<T extends Annotation> {
+
+  onChange: { (event: StoreChangeEvent<T>): void };
+
+  options: StoreObserveOptions;
+
+}
+
+/** A change event fired when the store state changes **/
+export interface StoreChangeEvent<T extends Annotation> {
+
+  origin: Origin;
+
+  changes: ChangeSet<T>;
+
+}
+
+export interface ChangeSet<T extends Annotation> {
+
+  created?: T[];
+
+  deleted?: T[];
+
+  updated?: Update<T>[];
+
+}
+
+export interface Update<T extends Annotation> {
+
+  oldValue: T;
+
+  newValue: T;
+
+  bodiesCreated?: T['bodies'];
+
+  bodiesDeleted?: T['bodies'];
+
+  bodiesUpdated?: Array<{ oldBody: T['bodies'][number], newBody: T['bodies'][number] }>;
+
+  targetUpdated?: { oldTarget: T['target'], newTarget: T['target'] };
+
+}
+
+/** Options to control which events the observer wants to get notified about **/
+export interface StoreObserveOptions {
+
+  // Observe changes on targets, bodies or both?
+  ignore?: Ignore;
+
+  // Observe changes on one or more specific annotations
+  annotations?: string | string[];
+
+  // Observe changes only for a specific origin
+  origin?: Origin;
+
+}
+
+/** Allows the observer to ignore certain event types **/
+export enum Ignore {
+
+  // Don't notify this observer for changes that involve bodies only
+  BODY_ONLY = 'BODY_ONLY',
+
+  // Don't notify for changes on targets only
+  TARGET_ONLY = 'TARGET_ONLY'
+
+}
+
+/**
+ * Allows the observer to listen only for events that originated locally or from a remote source.
+ *
+ * SILENT should be used for updates that are not supposed to trigger an event. Remember that
+ * with great power comes great responsibility: SILENT is really for Annotorious plugins and
+ * extensions ONLY.
+ */
+export enum Origin {
+
+  LOCAL = 'LOCAL',
+
+  REMOTE = 'REMOTE',
+
+  SILENT = 'SILENT'
+
+}
+
+/** Tests if this observer should be notified about this event **/
+export const shouldNotify = <T extends Annotation>(observer: StoreObserver<T>, event: StoreChangeEvent<T>) => {
+  const { changes, origin } = event;
+
+  const isRelevantOrigin = observer.options.origin
+    ? observer.options.origin === origin
+    : origin !== Origin.SILENT;
+
+  if (!isRelevantOrigin)
+    return false;
+
+  if (observer.options.ignore) {
+    const { ignore } = observer.options;
+
+    // Shorthand
+    const has = (arg: unknown[] | undefined) => Boolean(arg && arg.length > 0);
+
+    const hasAnnotationChanges =
+      has(changes.created) || has(changes.deleted);
+
+    if (!hasAnnotationChanges) {
+      const hasBodyChanges =
+        changes.updated?.some(u => has(u.bodiesCreated) || has(u.bodiesDeleted) || has(u.bodiesUpdated));
+
+      const hasTargetChanges =
+        changes.updated?.some(u => Boolean(u.targetUpdated));
+
+      if (ignore === Ignore.BODY_ONLY && hasBodyChanges && !hasTargetChanges)
+        return false;
+
+      if (ignore === Ignore.TARGET_ONLY && hasTargetChanges && !hasBodyChanges)
+        return false;
+    }
+  }
+
+  if (observer.options.annotations) {
+    // This observer has a filter set on specific annotations - check affected
+    const affectedAnnotations = new Set([
+      ...(changes.created || []).map(a => a.id),
+      ...(changes.deleted || []).map(a => a.id),
+      ...(changes.updated || []).map(({ oldValue }) => oldValue.id)
+    ]);
+
+    const observed = Array.isArray(observer.options.annotations)
+      ? observer.options.annotations : [observer.options.annotations];
+
+    return observed.some(id => affectedAnnotations.has(id));
+  } else {
+    return true;
+  }
+}
+
+/** Merges two subsequent change sets into one, e.g. for undo/redo debouncing **/
+export const mergeChanges = <T extends Annotation>(changes: ChangeSet<T>, toMerge: ChangeSet<T>): ChangeSet<T> => {
+  const previouslyCreatedIds = new Set((changes.created || []).map(a => a.id));
+  const previouslyUpdatedIds = new Set((changes.updated || []).map(({ newValue }) => newValue.id));
+
+  const createdIds = new Set((toMerge.created || []).map(a => a.id));
+  const deletedIds = new Set((toMerge.deleted || []).map(a => a.id));
+  const updatedIds = new Set((toMerge.updated || []).map(({ oldValue }) => oldValue.id));
+
+  // Updates that will be merged into create or previous update events
+  const mergeableUpdates = new Set((toMerge.updated || [])
+    .filter(({ oldValue }) => previouslyCreatedIds.has(oldValue.id) || previouslyUpdatedIds.has(oldValue.id))
+    .map(({ oldValue }) => oldValue.id));
+
+  // * created *
+  // - drop created that were then deleted
+  // - merge any updates on created
+  // - append newly created
+  const created = [
+    ...(changes.created || [])
+      .filter(a => !deletedIds.has(a.id))
+      .map(a => updatedIds.has(a.id)
+        ? toMerge.updated!.find(({ oldValue }) => oldValue.id === a.id)!.newValue
+        : a),
+    ...(toMerge.created || [])
+  ];
+
+  // * deleted *
+  // - drop deleted that were later re-created (redo action!)
+  // - append newly deleted, but remove any that delete annotations
+  //   that were created in the same round
+  const deleted = [
+    ...(changes.deleted || [])
+      .filter(a => !createdIds.has(a.id)),
+    ...(toMerge.deleted || [])
+      .filter(a => !previouslyCreatedIds.has(a.id))
+  ];
+
+  // * updated *
+  // - drop updates on deleted annotations
+  // - merge any updates that override previous ones
+  // - append new updates, but remove any that were merged
+  const updated = [
+    ...(changes.updated || [])
+      .filter(({ newValue }) => !deletedIds.has(newValue.id))
+      .map(update => {
+        const { oldValue, newValue } = update;
+        return updatedIds.has(newValue.id)
+          ? diffAnnotations(oldValue, toMerge.updated!.find(u => u.oldValue.id === newValue.id)!.newValue)
+          : update;
+      }),
+    ...(toMerge.updated || []).filter(({ oldValue }) => !mergeableUpdates.has(oldValue.id))
+  ];
+
+  return { created, deleted, updated };
+}

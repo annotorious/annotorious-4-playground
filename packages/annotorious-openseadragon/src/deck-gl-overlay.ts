@@ -1,6 +1,7 @@
 import type OpenSeadragon from 'openseadragon';
 import { Deck, OrthographicView } from '@deck.gl/core';
 
+// Modified from https://github.com/ynitto/openseadragon-deckgl-overlay/
 export const createDeckGLOverlay = (viewer: OpenSeadragon.Viewer, options?: any) => {
   let containerWidth = 0;
   let containerHeight = 0;
@@ -47,6 +48,8 @@ export const createDeckGLOverlay = (viewer: OpenSeadragon.Viewer, options?: any)
     });
 
     viewport.silenceMultiImageWarnings = lastFlag;
+
+    deck.redraw();
   };
 
   viewer.addHandler('update-viewport', () => {

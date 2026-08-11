@@ -12,6 +12,7 @@
     "test": "npm run test --workspaces"
   },
   "workspaces": [
-    "./packages/annotorious-core"
+    "./packages/annotorious-core",
+    "./packages/annotorious-core-spatial"
   ]
 }

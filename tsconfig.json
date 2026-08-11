@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/annotorious-core" }
+    { "path": "./packages/annotorious-core" },
+    { "path": "./packages/annotorious-core-spatial" }
   ]
 }

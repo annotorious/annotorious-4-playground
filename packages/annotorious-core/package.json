@@ -18,13 +18,13 @@
   },
   "type": "module",
   "sideEffects": false,
-  "main": "./dist/annotorious-core.cjs",
-  "module": "./dist/annotorious-core.mjs",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "require": "./dist/annotorious-core.cjs",
-      "import": "./dist/annotorious-core.mjs",
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs",
       "types": "./dist/index.d.ts"
     }
   },

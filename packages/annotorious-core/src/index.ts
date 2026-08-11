@@ -1,1 +1,4 @@
-export {}; // placeholder entrypoint for the @annotorious/core package
+export * from './lifecycle';
+export * from './model';
+export * from './state';
+export * from './utils';

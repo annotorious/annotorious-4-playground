@@ -10,40 +10,40 @@ const target = (id: string, selector: SpatialAnnotationTarget['selector']): Spat
   selector
 });
 
-const VIEWPORT = { bounds: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 }, resolution: 1 };
-
 describe('buildAnnotationLayers', () => {
 
-  it('produces only a PolygonLayer when everything is full-size', () => {
-    const layers = buildAnnotationLayers([target('a', createBox(0, 0, 100, 100))], VIEWPORT);
+  it('produces only a PolygonLayer for non-point shapes', () => {
+    const layers = buildAnnotationLayers([target('a', createBox(0, 0, 100, 100))]);
 
     expect(layers).toHaveLength(1);
     expect(layers[0]).toBeInstanceOf(PolygonLayer);
   });
 
   it('produces only a ScatterplotLayer for points', () => {
-    const layers = buildAnnotationLayers([target('a', createPoint(5, 5))], VIEWPORT);
+    const layers = buildAnnotationLayers([target('a', createPoint(5, 5))]);
 
     expect(layers).toHaveLength(1);
     expect(layers[0]).toBeInstanceOf(ScatterplotLayer);
   });
 
-  it('splits full-size and simplified shapes into separate layers', () => {
+  it('splits shapes and points into separate layers when both are present', () => {
     const candidates = [
-      target('big', createBox(0, 0, 1000, 1000)), // clearly "full" at resolution 1
-      target('tiny', createBox(2000, 2000, 2, 2)) // below simplifyBelowPx at resolution 1
+      target('shape', createBox(0, 0, 100, 100)),
+      target('point', createPoint(5, 5))
     ];
 
-    const layers = buildAnnotationLayers(candidates, { bounds: { minX: -1000, minY: -1000, maxX: 3000, maxY: 3000 }, resolution: 1 });
+    const layers = buildAnnotationLayers(candidates);
 
     expect(layers).toHaveLength(2);
     expect(layers.some(l => l instanceof PolygonLayer)).toBe(true);
     expect(layers.some(l => l instanceof ScatterplotLayer)).toBe(true);
   });
 
-  it('culls sub-pixel shapes entirely', () => {
-    const layers = buildAnnotationLayers([target('sub-pixel', createBox(0, 0, 0.1, 0.1))], VIEWPORT);
-    expect(layers).toHaveLength(0);
+  it('does not cull or simplify by on-screen size - deck.gl handles that', () => {
+    const layers = buildAnnotationLayers([target('sub-pixel', createBox(0, 0, 0.1, 0.1))]);
+
+    expect(layers).toHaveLength(1);
+    expect((layers[0] as PolygonLayer<SpatialAnnotationTarget>).props.data).toHaveLength(1);
   });
 
   it('is agnostic to how candidates were gathered - works directly off an index query too', () => {
@@ -51,8 +51,7 @@ describe('buildAnnotationLayers', () => {
     index.insert(target('in-view', createBox(0, 0, 100, 100)));
     index.insert(target('far-away', createBox(10000, 10000, 100, 100)));
 
-    const viewport = { bounds: { minX: 0, minY: 0, maxX: 100, maxY: 100 }, resolution: 1 };
-    const layers = buildAnnotationLayers(index.getIntersecting(viewport.bounds), viewport);
+    const layers = buildAnnotationLayers(index.getIntersecting({ minX: 0, minY: 0, maxX: 100, maxY: 100 }));
 
     expect(layers).toHaveLength(1);
     expect((layers[0] as PolygonLayer<SpatialAnnotationTarget>).props.data).toHaveLength(1);
@@ -60,7 +59,7 @@ describe('buildAnnotationLayers', () => {
 
   it('applies per-target styling via getStyle', () => {
     const t = target('a', createBox(0, 0, 100, 100));
-    const layers = buildAnnotationLayers([t], VIEWPORT, { getStyle: () => ({ fillColor: [1, 2, 3, 4] }) });
+    const layers = buildAnnotationLayers([t], { getStyle: () => ({ fillColor: [1, 2, 3, 4] }) });
 
     const layer = layers[0] as PolygonLayer<SpatialAnnotationTarget>;
     // @ts-expect-error - accessing internal props for test purposes

@@ -129,6 +129,12 @@ export const createPointerHandling = <E>(
     activeTool.onPointerDown(event);
   }
 
+  // The last pointermove we saw - kept around so hover can be re-evaluated
+  // when the *viewport* changes without the pointer itself moving (see
+  // onPostRender below). Not just a screen position: eventToWorld needs
+  // the original event.
+  let lastPointerEvent: PointerEvent | undefined;
+
   const onPointerMove = (event: PointerEvent) => {
     if (activeTool) {
       activeTool.onPointerMove(event);
@@ -137,9 +143,50 @@ export const createPointerHandling = <E>(
 
     if (drawingEnabled) return;
 
+    lastPointerEvent = event;
+
+    // Hover is suspended while anything is selected - see the guard on
+    // `selection` below for why.
+    if (!selection.isEmpty()) return;
+
     const hit = hitTestAt(eventToWorld(map, event));
     hover.set(hit ? hit.annotation : null);
   }
+
+  // Without this, hover gets stuck on whatever was last under the pointer:
+  // `onPointerMove` only ever runs (and updates hover) while the pointer is
+  // actually moving *inside* the viewport - it never fires again once the
+  // pointer leaves, so a shape hovered right before the cursor exits the
+  // map (or a drag/gesture elsewhere steals pointer capture) stays
+  // "hovered" indefinitely.
+  const onPointerLeave = () => {
+    lastPointerEvent = undefined;
+    hover.set(null);
+  }
+
+  // Re-evaluate hover whenever the *viewport* changes, not just on
+  // pointermove: zooming (especially via mouse wheel) changes which shape
+  // is under the pointer without the pointer's own screen position ever
+  // moving, so pointermove alone never fires and hover is left showing
+  // whatever was true before the zoom - re-hit-testing at the same last
+  // known screen position (now mapped through the new viewport) is what
+  // catches that. Hit-testing is a cheap, O(log n) spatial query - fine to
+  // run on every viewport-change frame, unlike a full layer rebuild.
+  const onPostRender = () => {
+    if (!lastPointerEvent || activeTool || drawingEnabled || !selection.isEmpty()) return;
+    const hit = hitTestAt(eventToWorld(map, lastPointerEvent));
+    hover.set(hit ? hit.annotation : null);
+  }
+
+  // Hover tracking gets in the way while editing a selected annotation
+  // (handles moving under the pointer constantly re-trigger hover, fighting
+  // visually with the selected styling) - suspend it entirely whenever
+  // there's an active selection, and clear anything it was showing right as
+  // the selection is made rather than leaving it stuck on whatever was
+  // hovered the instant before.
+  const unsubscribeSelectionForHover = selection.subscribe(() => {
+    if (!selection.isEmpty() && hover.current) hover.set(null);
+  });
 
   // Select/deselect is decided on pointerup, not pointerdown - a pointerdown
   // on empty space is also how a pan gesture starts, and we don't know
@@ -195,17 +242,33 @@ export const createPointerHandling = <E>(
   }
 
   const onKeyDown = (event: KeyboardEvent) => {
-    activeTool?.onKeyDown?.(event);
+    if (activeTool) {
+      activeTool.onKeyDown?.(event);
+      return;
+    }
+
+    // Escape to deselect - matters most exactly when there's no free canvas
+    // space left to click to deselect (e.g. a dense field of annotations
+    // covering the whole viewport).
+    if (event.key === 'Escape' && !selection.isEmpty())
+      selection.userSelect([], event);
   }
 
   const viewport = map.getViewport();
   viewport.addEventListener('pointermove', onPointerMove);
   viewport.addEventListener('pointerdown', onPointerDown);
   viewport.addEventListener('pointerup', onPointerUp);
+  viewport.addEventListener('pointerleave', onPointerLeave);
+  viewport.addEventListener('pointercancel', onPointerLeave);
   viewport.addEventListener('keydown', onKeyDown);
+  map.on('postrender', onPostRender);
 
   const setDrawingEnabled = (enabled: boolean) => {
     drawingEnabled = enabled;
+    // Drawing mode stops onPointerMove from updating hover at all (see
+    // above) - clear it going in, rather than leaving it frozen on
+    // whatever happened to be hovered the instant drawing was enabled.
+    if (enabled) hover.set(null);
     if (!enabled && activeTool) endDrawingSession();
   }
 
@@ -235,7 +298,11 @@ export const createPointerHandling = <E>(
     viewport.removeEventListener('pointermove', onPointerMove);
     viewport.removeEventListener('pointerdown', onPointerDown);
     viewport.removeEventListener('pointerup', onPointerUp);
+    viewport.removeEventListener('pointerleave', onPointerLeave);
+    viewport.removeEventListener('pointercancel', onPointerLeave);
     viewport.removeEventListener('keydown', onKeyDown);
+    map.un('postrender', onPostRender);
+    unsubscribeSelectionForHover();
   }
 
   return { cancelDrawing, destroy, getDrawingTool, isDrawingEnabled, setDrawingEnabled, setDrawingMode, setDrawingTool };

@@ -6,6 +6,7 @@ import {
   createUndoStack
 } from '@annotorious/core';
 import type {
+  AnnotationState,
   DrawingStyleExpression,
   Filter,
   FormatAdapter,
@@ -13,7 +14,7 @@ import type {
   UserSelectActionExpression
 } from '@annotorious/core';
 import { createDraftStore, createImageIndexes, listTools, toRenderStyle } from '@annotorious/core-spatial';
-import type { DrawingMode, LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget, SpatialAnnotator } from '@annotorious/core-spatial';
+import type { DrawingMode, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget, SpatialAnnotator } from '@annotorious/core-spatial';
 import { createDeckOverlay } from './deck-overlay';
 import { createEditorOverlay } from './editor-overlay';
 import { createImageRegistry } from './image-registry';
@@ -28,8 +29,6 @@ export interface OpenSeadragonAnnotatorOpts<E = SpatialAnnotation> {
   drawingMode?: DrawingMode;
 
   initialUser?: User;
-
-  lod?: LODOptions;
 
   multiSelect?: boolean;
 
@@ -112,14 +111,23 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
   let currentStyle: DrawingStyleExpression<SpatialAnnotation> | undefined;
   let currentFilter: Filter<SpatialAnnotation> | undefined;
 
-  const getStyle = (target: SpatialAnnotationTarget) => {
+  // `state` is passed in explicitly by the render loop - always `{}` for
+  // the base (non-highlighted) layer, always the real, live state for the
+  // highlight layer - rather than read independently from `selection`/
+  // `hover` here. The base layer is rebuilt at unpredictable times (a
+  // debounced viewport-settle, a data change), so if this read live state
+  // itself, whatever happened to be selected/hovered at that arbitrary
+  // moment would get baked into the base layer permanently, until some
+  // later, unrelated rebuild happened to overwrite it - visible as a
+  // shape's hover/selected styling getting stuck (see render-loop.ts).
+  const getStyle = (target: SpatialAnnotationTarget, state: AnnotationState) => {
     if (!currentStyle) return undefined;
 
     const annotation = store.getAnnotation(target.annotation);
     if (!annotation) return undefined;
 
     const computed = typeof currentStyle === 'function'
-      ? currentStyle(annotation, { selected: selection.isSelected(annotation.id), hovered: hover.current === annotation.id })
+      ? currentStyle(annotation, state)
       : currentStyle;
 
     return computed ? toRenderStyle(computed) : undefined;
@@ -129,8 +137,7 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
 
   const deckOverlay = createDeckOverlay(viewer, store, imageRegistry, imageIndexes, draftStore, state.viewport, {
     getStyle,
-    getFilter,
-    ...(opts.lod ? { lod: opts.lod } : {})
+    getFilter
   });
 
   // Selection/hover are their own state slices, separate from the store -
@@ -142,9 +149,10 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
   // fires on every mousemove, and a full re-render of every annotation on
   // every hover change doesn't scale (see render-loop.ts's module doc).
   const updateHighlighted = () => {
-    const ids = new Set(selection.selected.map(s => s.id));
-    if (hover.current) ids.add(hover.current);
-    deckOverlay.setHighlighted(ids);
+    const states = new Map<string, AnnotationState>();
+    selection.selected.forEach(({ id }) => states.set(id, { selected: true }));
+    if (hover.current) states.set(hover.current, { ...states.get(hover.current), hovered: true });
+    deckOverlay.setHighlighted(states);
   }
   const unsubscribeSelection = selection.subscribe(updateHighlighted);
   const unsubscribeHover = hover.subscribe(updateHighlighted);

@@ -1,10 +1,8 @@
 import type { Layer } from '@deck.gl/core';
 import { PolygonLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { boxCorners, ShapeType } from '../geometry';
-import type { SpatialShape } from '../geometry';
+import type { Point, SpatialShape } from '../geometry';
 import type { SpatialAnnotationTarget } from '../model';
-import { classify } from './lod';
-import type { LODOptions, RenderViewport } from './lod';
 
 export interface RenderStyle {
 
@@ -25,11 +23,9 @@ const DEFAULT_STYLE: Required<RenderStyle> = {
 
 export interface BuildLayersOptions<T extends SpatialAnnotationTarget> {
 
-  lod?: LODOptions;
-
   getStyle?: (target: T) => RenderStyle | undefined;
 
-  /** Screen-constant minimum radius (px) for point/simplified representations. Default 4. **/
+  /** Screen-constant minimum radius (px) for point annotations. Default 4. **/
   pointRadiusMinPixels?: number;
 
   /** Prefix for layer ids - needed if multiple annotators share one Deck instance. **/
@@ -37,9 +33,6 @@ export interface BuildLayersOptions<T extends SpatialAnnotationTarget> {
 
 }
 
-// Only ever called for the "full" bucket, which by construction never
-// contains points (see buildAnnotationLayers) - the explicit switch (rather
-// than a two-way ternary) is what lets TS confirm that for us.
 const shapeToPolygonRing = (shape: SpatialShape): [number, number][] => {
   switch (shape.type) {
     case ShapeType.BOX: return boxCorners(shape.geometry);
@@ -48,58 +41,33 @@ const shapeToPolygonRing = (shape: SpatialShape): [number, number][] => {
   }
 }
 
-const shapeCentroid = (shape: SpatialShape): [number, number] => {
-  if (shape.type === ShapeType.POINT)
-    return [shape.geometry.x, shape.geometry.y];
-
-  const { minX, minY, maxX, maxY } = shape.geometry.bounds;
-  return [(minX + maxX) / 2, (minY + maxY) / 2];
-}
+const pointPosition = (shape: Point): [number, number] => [shape.geometry.x, shape.geometry.y];
 
 /**
- * Builds the deck.gl layers for a given set of candidate targets - typically
- * whatever a spatial index's `getIntersecting(viewport.bounds)` returned, but
- * deliberately decoupled from any particular index: a multi-image
- * OpenSeadragon world needs to gather candidates from several per-image
- * indexes and merge them (each transformed into shared world space) before
- * they get here, which a single index reference couldn't express. For the
- * common single-coordinate-space case (OpenLayers, single-image
- * OpenSeadragon), that's just `buildAnnotationLayers(index.getIntersecting(viewport.bounds), viewport)`.
+ * Builds the deck.gl layers for a given set of candidate targets. Every
+ * non-point shape goes to one `PolygonLayer`, every point to one
+ * `ScatterplotLayer` - deck.gl/the GPU handles culling what's off-screen
+ * and simplifying what's rendered, via the camera transform and its own
+ * rendering pipeline; this deliberately does no viewport culling or
+ * level-of-detail simplification of its own on top of that.
  *
- * Applies the point/cull LOD simplification on top of whatever candidates
- * it's given - the MVP-tier scaling strategy. Both layers are
- * `pickable: false`: hit-testing goes through a spatial index (see
- * `AnnotationIndex.getAt`) against actual geometry, not GPU color picking,
- * which stays precise and fast at very large annotation counts where GPU
- * picking degrades.
- *
- * Call this again whenever the viewport changes (pan/zoom) or the
- * underlying annotation data changes - there's no persistent state to
- * invalidate, it always reflects exactly the candidates it's given.
+ * Both layers are `pickable: false`: hit-testing goes through a spatial
+ * index (see `AnnotationIndex.getAt`) against actual geometry, not GPU
+ * color picking, which stays precise and fast at very large annotation
+ * counts where GPU picking degrades.
  */
 export const buildAnnotationLayers = <T extends SpatialAnnotationTarget>(
   candidates: T[],
-  viewport: RenderViewport,
   opts: BuildLayersOptions<T> = {}
 ): Layer[] => {
   const idPrefix = opts.idPrefix ? `${opts.idPrefix}-` : '';
   const pointRadiusMinPixels = opts.pointRadiusMinPixels ?? 4;
 
-  const full: T[] = [];
-  const simplified: T[] = [];
+  const polygons: T[] = [];
+  const points: T[] = [];
 
-  for (const target of candidates) {
-    if (target.selector.type === ShapeType.POINT) {
-      // A point has no world-space extent to measure - it's always its own
-      // simplified representation, never culled by size.
-      simplified.push(target);
-      continue;
-    }
-
-    const bucket = classify(target.selector.geometry.bounds, viewport.resolution, opts.lod);
-    if (bucket === 'culled') continue;
-    (bucket === 'simplified' ? simplified : full).push(target);
-  }
+  for (const target of candidates)
+    (target.selector.type === ShapeType.POINT ? points : polygons).push(target);
 
   // Memoized per candidate - deck.gl calls getFillColor/getLineColor/
   // getLineWidth as three independent accessors, and opts.getStyle is
@@ -118,10 +86,10 @@ export const buildAnnotationLayers = <T extends SpatialAnnotationTarget>(
 
   const layers: Layer[] = [];
 
-  if (full.length > 0) {
+  if (polygons.length > 0) {
     layers.push(new PolygonLayer<T>({
       id: `${idPrefix}annotations-shapes`,
-      data: full,
+      data: polygons,
       pickable: false,
       stroked: true,
       filled: true,
@@ -133,14 +101,14 @@ export const buildAnnotationLayers = <T extends SpatialAnnotationTarget>(
     }));
   }
 
-  if (simplified.length > 0) {
+  if (points.length > 0) {
     layers.push(new ScatterplotLayer<T>({
       id: `${idPrefix}annotations-points`,
-      data: simplified,
+      data: points,
       pickable: false,
       stroked: true,
       filled: true,
-      getPosition: t => shapeCentroid(t.selector),
+      getPosition: t => pointPosition(t.selector as Point),
       getFillColor: t => style(t).fillColor,
       getLineColor: t => style(t).lineColor,
       getLineWidth: t => style(t).lineWidth,

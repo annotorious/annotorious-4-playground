@@ -1,0 +1,56 @@
+{
+  "name": "@annotorious/plugin-broadcast-sync",
+  "version": "4.0.0-preview",
+  "description": "Reference multiplayer sync plugin for Annotorious v4, using BroadcastChannel",
+  "author": "Rainer Simon",
+  "license": "BSD-3-Clause",
+  "homepage": "https://annotorious.dev",
+  "keywords": [
+    "annotation",
+    "image annotation",
+    "data annotation",
+    "multiplayer",
+    "collaboration"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/annotorious/annotorious.git"
+  },
+  "bugs": {
+    "url": "https://github.com/annotorious/annotorious/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.cjs",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "start": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest",
+    "coverage": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@annotorious/openseadragon": "*",
+    "jsdom": "^30.0.1",
+    "openseadragon": "^6.1.0",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16",
+    "vite-plugin-dts": "^5.0.2",
+    "vitest": "^4.1.8"
+  },
+  "dependencies": {
+    "@annotorious/core": "*",
+    "@annotorious/core-spatial": "*"
+  }
+}

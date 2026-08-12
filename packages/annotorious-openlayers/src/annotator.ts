@@ -6,7 +6,6 @@ import {
   createUndoStack
 } from '@annotorious/core';
 import type {
-  Annotator,
   DrawingStyleExpression,
   Filter,
   FormatAdapter,
@@ -14,7 +13,7 @@ import type {
   UserSelectActionExpression
 } from '@annotorious/core';
 import { createDraftStore, createImageIndexes, listTools, toRenderStyle } from '@annotorious/core-spatial';
-import type { LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget } from '@annotorious/core-spatial';
+import type { LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget, SpatialAnnotator } from '@annotorious/core-spatial';
 import { createDeckOverlay } from './deck-overlay';
 import { createEditorOverlay } from './editor-overlay';
 import { createImageRegistry } from './image-registry';
@@ -50,7 +49,7 @@ export interface OpenLayersAnnotatorOpts<E = SpatialAnnotation> {
 
 }
 
-export interface OpenLayersAnnotator<E = SpatialAnnotation> extends Annotator<SpatialAnnotation, E> {
+export interface OpenLayersAnnotator<E = SpatialAnnotation> extends SpatialAnnotator<E> {
 
   map: Map;
 
@@ -152,6 +151,7 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
     map,
     cancelDrawing: pointerHandling.cancelDrawing,
     destroy,
+    draftStore,
     getDrawingTool: pointerHandling.getDrawingTool,
     isDrawingEnabled: pointerHandling.isDrawingEnabled,
     listDrawingTools: listTools,

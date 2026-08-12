@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8' />
+    <title>Annotorious 4 - Broadcast Sync Demo</title>
+    <script type='module' src='./annotator.ts'></script>
+    <style>
+      html, body, #openseadragon {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      .controls {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        z-index: 2;
+        background: rgba(255, 255, 255, 0.92);
+        padding: 10px 14px;
+        border-radius: 6px;
+        font: 13px sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .controls button {
+        cursor: pointer;
+      }
+
+      .controls button.active {
+        background: #1a73e8;
+        color: white;
+      }
+
+      .row {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+
+      #peer-id {
+        font-size: 11px;
+        color: #555;
+        padding-top: 2px;
+        border-top: 1px solid #ccc;
+      }
+
+      #peer-id b {
+        color: #1a73e8;
+      }
+
+      #log {
+        max-width: 280px;
+        max-height: 140px;
+        overflow-y: auto;
+        font-size: 11px;
+        color: #333;
+        border-top: 1px solid #ccc;
+        padding-top: 4px;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="openseadragon">
+      <div class="controls">
+        <div class="row">
+          <button id="tool-box">Box</button>
+          <button id="tool-polygon">Polygon</button>
+          <button id="tool-point">Point</button>
+          <button id="tool-off">Off</button>
+        </div>
+        <div class="row">
+          <button id="undo">Undo</button>
+          <button id="redo">Redo</button>
+        </div>
+        <div id="peer-id">Peer: <b>...</b></div>
+        <div id="log"></div>
+      </div>
+    </div>
+  </body>
+</html>

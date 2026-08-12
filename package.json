@@ -15,6 +15,7 @@
     "./packages/annotorious-core",
     "./packages/annotorious-core-spatial",
     "./packages/annotorious-openseadragon",
-    "./packages/annotorious-openlayers"
+    "./packages/annotorious-openlayers",
+    "./packages/annotorious-plugin-broadcast-sync"
   ]
 }

@@ -4,6 +4,7 @@ export * from './geometry';
 export * from './image-indexes';
 export * from './model';
 export * from './render';
+export * from './spatial-annotator';
 export * from './spatial-index';
 export * from './tools';
 export * from './w3c';

@@ -20,7 +20,18 @@ const viewer = OpenSeadragon({
   tileSources: IMAGE_1,
   gestureSettingsMouse: {
     clickToZoom: false
-  }
+  },
+  // OSD defaults to preferring its own WebGL drawer for tiles
+  // (['auto', 'webgl', 'canvas', 'html']) - stacking that on top of deck.gl's
+  // own WebGL canvas means two independent WebGL contexts competing for the
+  // same GPU/texture memory. At 100k+ annotations, deck.gl's buffers are
+  // large enough that OSD's own context can start failing texture creation
+  // (visible as "Error creating texture in WebGL" - that's OSD's tile
+  // renderer, not deck.gl or this library) and its tiles fall behind the
+  // viewport our overlay is tracking, which looks like the two drifting
+  // apart. Tile rendering doesn't need WebGL - only the 100k-shape overlay
+  // does - so keep them on separate rendering paths entirely.
+  drawer: 'canvas'
 });
 
 const anno = createOSDAnnotator(viewer, { multiSelect: true });
@@ -31,10 +42,36 @@ const anno = createOSDAnnotator(viewer, { multiSelect: true });
 // Demonstrates AnnotationState (selected/hovered) actually reaching the
 // style callback: selected annotations render solid red, hovered ones get
 // a heavier stroke, everything else uses the library default.
-anno.setStyle((_annotation, state) => {
+// Default (unselected/unhovered) shapes render fill-only, no stroke - matches
+// test/index.ts's raw deck.gl benchmark (getLineWidth: 0), which exists
+// specifically so panning/zooming performance is comparable apples-to-apples:
+// a visible stroke means deck.gl builds and rasterizes a second (fill +
+// stroke) sub-layer pass for every shape on every redraw, which is real,
+// non-trivial GPU cost at high shape counts - not something the library
+// defaults to skipping, since annotation borders are usually wanted, but not
+// something this side-by-side comparison should be paying for either.
+// Stable per-annotation random fill, matching test/index.ts's raw benchmark
+// (`fillColor: [255*Math.random(), ...]`, assigned once per shape at
+// generation time) - assigned lazily here instead, on first style lookup,
+// and cached by id so it doesn't re-roll (and visibly flicker) on every
+// rebuild. A `Math.random()` called directly inside the style callback
+// would do exactly that, since the callback re-runs whenever the base
+// layer rebuilds.
+const randomFillColors = new Map<string, string>();
+const randomFillFor = (id: string): string => {
+  let color = randomFillColors.get(id);
+  if (!color) {
+    const rand255 = () => Math.floor(255 * Math.random());
+    color = `rgb(${rand255()}, ${rand255()}, ${rand255()})`;
+    randomFillColors.set(id, color);
+  }
+  return color;
+}
+
+anno.setStyle((annotation, state) => {
   if (state?.selected) return { fill: '#e8341a', fillOpacity: 0.4, stroke: '#e8341a', strokeWidth: 3 };
   if (state?.hovered) return { strokeWidth: 4 };
-  return undefined;
+  return { fill: randomFillFor(annotation.id), fillOpacity: 100 / 255, strokeWidth: 0 };
 });
 
 const log = document.getElementById('log') as HTMLDivElement;
@@ -45,7 +82,32 @@ const line = (msg: string) => {
   while (log.childElementCount > 20) log.lastChild?.remove();
 }
 
-anno.on('createAnnotation', a => line(`created ${a.id} (${a.target.selector.type})`));
+// createAnnotation fires once per annotation - fine for drawing one shape
+// interactively, but a bulk `setAnnotations(100_000_shapes)` call fires it
+// 100,000 times. Logging each individually would mean 100,000 DOM writes,
+// swamping whatever the actual generate cost is - coalesce into one summary
+// line per burst instead, the way any real host handling bulk data would.
+// Scheduled at most once per burst (not reset on every event, i.e. throttled
+// rather than debounced) - a debounce-style clearTimeout+setTimeout on every
+// single call would just relocate the same "100,000 timer operations" cost
+// from the DOM write into the scheduling itself.
+let pendingCreates: string[] = [];
+let flushCreatesScheduled = false;
+const flushCreates = () => {
+  flushCreatesScheduled = false;
+  if (pendingCreates.length === 0) return;
+  line(pendingCreates.length === 1
+    ? `created ${pendingCreates[0]}`
+    : `created ${pendingCreates.length} annotations`);
+  pendingCreates = [];
+}
+anno.on('createAnnotation', a => {
+  pendingCreates.push(`${a.id} (${a.target.selector.type})`);
+  if (!flushCreatesScheduled) {
+    flushCreatesScheduled = true;
+    setTimeout(flushCreates, 200);
+  }
+});
 anno.on('selectionChanged', selected => line(`selected [${selected.map(a => a.id.slice(0, 6)).join(', ')}]`));
 anno.on('updateAnnotation', a => line(`updated ${a.id}`));
 anno.on('deleteAnnotation', a => line(`deleted ${a.id}`));
@@ -114,12 +176,18 @@ const perfCountInput = document.getElementById('perf-count') as HTMLInputElement
 const perfGenerateButton = document.getElementById('perf-generate') as HTMLButtonElement;
 const perfFpsLabel = document.getElementById('perf-fps') as HTMLSpanElement;
 
+// Shape size range matches test/index.ts's raw deck.gl benchmark (20-220px)
+// deliberately - a fair comparison needs the same on-screen density/overdraw,
+// not just the same shape count. `width/10`-scaled boxes (up to ~500x750px
+// on this image) cover roughly 7x the area on average, which alone is enough
+// to make rendering meaningfully more GPU-expensive independent of anything
+// else, and would have made any A/B comparison against the raw demo unfair.
 const generateAnnotations = (n: number): SpatialAnnotation[] => {
   const { x: width, y: height } = viewer.world.getItemAt(0).getContentSize();
 
   return Array.from({ length: n }, () => {
-    const w = 20 + Math.random() * (width / 10);
-    const h = 20 + Math.random() * (height / 10);
+    const w = 20 + Math.random() * 200;
+    const h = 20 + Math.random() * 200;
     const x = Math.random() * (width - w);
     const y = Math.random() * (height - h);
 

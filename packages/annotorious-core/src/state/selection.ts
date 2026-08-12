@@ -64,12 +64,14 @@ export const createSelectionState = <I extends Annotation, E extends unknown>(
       return;
     }
 
-    const selected = annotations.reduce<Selection['selected']>((sel, a) => {
-      const action = evalSelectAction(a);
-      return action === UserSelectAction.EDIT ? [...sel, { id: a.id, editable: true }]
-        : action === UserSelectAction.SELECT ? [...sel, { id: a.id }]
-        : sel;
-    }, []);
+    const selected = annotations
+      .map(a => {
+        const action = evalSelectAction(a);
+        return action === UserSelectAction.EDIT ? { id: a.id, editable: true }
+          : action === UserSelectAction.SELECT ? { id: a.id }
+          : undefined;
+      })
+      .filter((s): s is Selection['selected'][number] => Boolean(s));
 
     selection.set(event ? { selected, event } : { selected });
   }

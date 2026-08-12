@@ -64,6 +64,7 @@ export const createDeckOverlay = (
     destroy,
     refresh: renderLoop.refresh,
     render: renderLoop.render,
+    setHighlighted: renderLoop.setHighlighted,
     setHints: (hints: ToolHint[], tiledImage?: OpenSeadragon.TiledImage) => renderLoop.setHints(hints, tiledImage),
     setVisible: renderLoop.setVisible
   };

@@ -22,19 +22,18 @@ export const serializeAll =
   <A extends Annotation, T extends unknown>(adapter: FormatAdapter<A, T>) =>
     (annotations: A[]) => annotations.map(a => adapter.serialize(a));
 
-export const parseAll = 
+export const parseAll =
   <A extends Annotation, T extends unknown>(adapter: FormatAdapter<A, T>) =>
-    (serialized: T[]) => serialized.reduce((result, next) => {
-      const { parsed, error } = adapter.parse(next);
-      
-      return error ? {
-        parsed: result.parsed,
-        failed: [...result.failed, next ]
-      } : parsed ? {
-        parsed: [...result.parsed, parsed ],
-        failed: result.failed
-      } : {
-        ...result
+    (serialized: T[]) => {
+      const parsed: A[] = [];
+      const failed: T[] = [];
+
+      for (const next of serialized) {
+        const result = adapter.parse(next);
+        if (result.error) failed.push(next);
+        else if (result.parsed) parsed.push(result.parsed);
       }
-    }, { parsed: [] as A[], failed: [] as T[]});
+
+      return { parsed, failed };
+    };
   

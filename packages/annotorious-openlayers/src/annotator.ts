@@ -139,11 +139,19 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
 
   // Selection/hover are their own state slices, separate from the store -
   // a style callback that reads `state.selected`/`state.hovered` (see
-  // getStyle above) needs a fresh render whenever either changes, or the
-  // shape keeps showing whatever style was last computed before the change
-  // (e.g. still unselected-colored right after being selected).
-  const unsubscribeSelection = selection.subscribe(() => deckOverlay.render());
-  const unsubscribeHover = hover.subscribe(() => deckOverlay.render());
+  // getStyle above) needs the highlight layer refreshed whenever either
+  // changes, or the shape keeps showing whatever style was last computed
+  // before the change (e.g. still unselected-colored right after being
+  // selected). Routed through `setHighlighted`, not `render()` - hover
+  // fires on every mousemove, and a full re-render of every annotation on
+  // every hover change doesn't scale (see render-loop.ts's module doc).
+  const updateHighlighted = () => {
+    const ids = new Set(selection.selected.map(s => s.id));
+    if (hover.current) ids.add(hover.current);
+    deckOverlay.setHighlighted(ids);
+  }
+  const unsubscribeSelection = selection.subscribe(updateHighlighted);
+  const unsubscribeHover = hover.subscribe(updateHighlighted);
 
   const pointerHandling = createPointerHandling(map, state, imageRegistry, imageIndexes, draftStore, {
     ...(opts.multiSelect !== undefined ? { multiSelect: opts.multiSelect } : {}),

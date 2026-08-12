@@ -55,17 +55,60 @@ export const createLifecycleObserver = <I extends Annotation, E extends unknown>
   const serialize = (a: I): E => adapter ? adapter.serialize(a) : a as unknown as E;
 
   // Deferred to the next tick, so listeners never observe the store mid-transaction.
-  const emit = (event: keyof LifecycleEvents<E>, arg0: I | I[], arg1?: I | PointerEvent) => {
-    const callbacks = listeners.get(event);
-    if (!callbacks || callbacks.size === 0) return;
+  //
+  // Queued rather than given its own `setTimeout` per call: a single bulk
+  // operation (e.g. `setAnnotations` on 100,000 annotations) fires this once
+  // per annotation, all within the same synchronous turn - scheduling
+  // 100,000 independent timers (each with its own V8 timer-heap entry and
+  // callback frame) costs real, measurable time on top of whatever the
+  // listeners themselves do, even when a listener does nothing. Batching
+  // every emission queued within one turn into a single flush keeps the
+  // exact same public behavior (one listener call per emission, still
+  // deferred past the current transaction, still in order) while paying for
+  // one timer instead of thousands.
+  const pendingEmissions: Array<{ event: keyof LifecycleEvents<E>, arg0: I | I[], arg1: I | PointerEvent | undefined }> = [];
+  let flushScheduled = false;
 
-    setTimeout(() => {
+  const flushEmissions = () => {
+    flushScheduled = false;
+
+    // Emissions queued *while* this flush runs (a listener that itself
+    // triggers a store change, say) are left for the next flush rather than
+    // processed in this pass, so a listener can't inadvertently starve the
+    // event loop by chaining emissions forever within one synchronous flush.
+    const toProcess = pendingEmissions.splice(0, pendingEmissions.length);
+
+    toProcess.forEach(({ event, arg0, arg1 }) => {
+      const callbacks = listeners.get(event);
+      if (!callbacks || callbacks.size === 0) return;
+
       const serialized0 = Array.isArray(arg0) ? arg0.map(serialize) : serialize(arg0);
       const isPointerEvent = typeof PointerEvent !== 'undefined' && arg1 instanceof PointerEvent;
       const serialized1 = isPointerEvent ? arg1 : (arg1 ? serialize(arg1 as I) : undefined);
 
-      callbacks.forEach(callback => (callback as (a: unknown, b: unknown) => void)(serialized0, serialized1));
-    }, 1);
+      callbacks.forEach(callback => {
+        // One listener throwing shouldn't stop the rest of the batch -
+        // matches the old one-`setTimeout`-per-emission behavior, where an
+        // exception in one callback couldn't affect any other's timer.
+        try {
+          (callback as (a: unknown, b: unknown) => void)(serialized0, serialized1);
+        } catch (error) {
+          console.error(`Error in '${String(event)}' listener:`, error);
+        }
+      });
+    });
+  }
+
+  const emit = (event: keyof LifecycleEvents<E>, arg0: I | I[], arg1?: I | PointerEvent) => {
+    const callbacks = listeners.get(event);
+    if (!callbacks || callbacks.size === 0) return;
+
+    pendingEmissions.push({ event, arg0, arg1 });
+
+    if (!flushScheduled) {
+      flushScheduled = true;
+      setTimeout(flushEmissions, 1);
+    }
   }
 
   // Baseline "before" snapshot for annotations with an unreported target

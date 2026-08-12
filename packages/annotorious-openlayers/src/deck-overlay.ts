@@ -55,6 +55,7 @@ export const createDeckOverlay = (
     destroy,
     refresh: renderLoop.refresh,
     render: renderLoop.render,
+    setHighlighted: renderLoop.setHighlighted,
     setHints: (hints: ToolHint[], image?: RegisteredImage) => renderLoop.setHints(hints, image),
     setVisible: renderLoop.setVisible
   };

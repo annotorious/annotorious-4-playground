@@ -97,6 +97,16 @@ const VIEWPORT_SETTLE_MS = 500;
  * handed to deck.gl whole - the same "just give the GPU everything"
  * approach a plain deck.gl+viewer benchmark would use, and the reason that
  * stays smooth at 100k+.
+ *
+ * One more thing deliberately kept off `rebuildLayers`: hover and
+ * selection. A style callback that reacts to `{selected, hovered}` state
+ * (a common, expected thing to want) would otherwise force a full rebuild
+ * of the *entire* candidate set every time either changes - and hover in
+ * particular fires on every mousemove, so with 100,000 annotations on
+ * screen the hovered id changes almost continuously as the pointer crosses
+ * shape boundaries. `setHighlighted` renders the few currently
+ * selected/hovered ids as a small second layer drawn on top of the base
+ * one instead, so that traffic never touches the other 99,000+ shapes.
  */
 export const createDeckRenderLoop = <Img>(
   mount: HTMLElement,
@@ -206,16 +216,32 @@ export const createDeckRenderLoop = <Img>(
   const style = (target: SpatialAnnotationTarget): RenderStyle | undefined =>
     isDraftAnnotationId(target.annotation) ? DRAFT_STYLE : opts.getStyle?.(target);
 
+  // The submitted layers are kept in three named pieces and always merged
+  // before being handed to deck.gl - see `submitLayers`. Splitting them out
+  // is what lets a hover/selection change (see `highlightLayers` below)
+  // update without touching the other two, instead of rebuilding a single
+  // combined array (which would force deck.gl to re-diff and potentially
+  // re-upload everything just because the array reference changed).
+  let baseLayers: ReturnType<typeof buildAnnotationLayers> = [];
+  let hintLayersCache: ReturnType<typeof buildHintLayers> = [];
+  let highlightLayers: ReturnType<typeof buildAnnotationLayers> = [];
+
+  const submitLayers = () => {
+    deck.setProps({ layers: [...baseLayers, ...hintLayersCache, ...highlightLayers] });
+    deck.redraw();
+  }
+
   /**
-   * Rebuilds the deck.gl layers from the cached candidates: applies the
-   * current filter, LOD-classifies against the *current* resolution, and
-   * constructs fresh layers/GPU buffers. This is the relatively expensive
-   * path - call it (or schedule it via `scheduleFrame`) when the candidate
-   * set or its styling can have changed. Never called from the per-frame
-   * viewport handler - see `paintCamera` for that.
+   * Rebuilds the *base* deck.gl layers from the cached candidates: applies
+   * the current filter, LOD-classifies against the *current* resolution,
+   * and constructs fresh layers/GPU buffers for the full committed+draft
+   * set. This is the expensive path - call it (or schedule it via
+   * `scheduleFrame`) when the candidate set itself, or the filter, can have
+   * changed. Deliberately NOT triggered by hover/selection changes -
+   * see `setHighlighted`. Never called from the per-frame viewport handler
+   * either - see `paintCamera` for that.
    */
   const rebuildLayers = () => {
-    const __t0 = performance.now();
     const filter = opts.getFilter?.();
 
     const allCommitted = [...committedCache.values()];
@@ -229,22 +255,67 @@ export const createDeckRenderLoop = <Img>(
     const candidates = [...committed, ...draftsCache];
 
     const renderViewport = adapter.getRenderViewport();
-    const layers = buildAnnotationLayers(candidates, renderViewport, { ...opts, getStyle: style });
+    baseLayers = buildAnnotationLayers(candidates, renderViewport, { ...opts, getStyle: style });
 
-    const hintLayers = hintState
+    hintLayersCache = hintState
       ? buildHintLayers(hintState.hints.map(h => adapter.hintToWorld(hintState!.image, h)))
       : [];
 
-    deck.setProps({ layers: [...layers, ...hintLayers] });
-    deck.redraw();
-    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0 };
-    (window as any).__renderLoopDebug.rebuildLayers++;
-    (window as any).__renderLoopDebug.rebuildLayersMs += performance.now() - __t0;
+    submitLayers();
   }
 
-  /** Cheap camera-only update for pan/zoom - touches no annotation data, no spatial index, at all. **/
+  // The currently "interesting" annotation ids - selected and/or hovered -
+  // whose style needs to react live to that state. Rendered as a second,
+  // separate layer drawn on top of the base one, containing only these few
+  // targets (pulled straight out of the already-cached committedCache, no
+  // index/store lookup needed) - NOT by rebuilding the base layer's full
+  // candidate set. Hovering fires on every mousemove, and with 100,000
+  // annotations on screen the hovered id changes almost continuously as the
+  // pointer crosses shape boundaries; rebuilding a 100,000-item layer on
+  // every one of those changes (which is what happens if hover/selection
+  // just calls the same `rebuildLayers` as a data change) is the actual
+  // dominant cost at that scale - far more than anything pan/zoom does.
+  // Whatever the base layer drew underneath a highlighted shape is simply
+  // occluded by this layer's redraw of the same geometry on top, so the
+  // base layer never needs to know which ids are highlighted at all.
+  let highlightedIds: Iterable<string> = [];
+  let highlightFrameScheduled = false;
+
+  const rebuildHighlightLayer = () => {
+    highlightFrameScheduled = false;
+
+    const highlighted: SpatialAnnotationTarget[] = [];
+    for (const id of highlightedIds) {
+      const target = committedCache.get(id);
+      if (target) highlighted.push(target);
+    }
+
+    const renderViewport = adapter.getRenderViewport();
+    highlightLayers = highlighted.length > 0
+      ? buildAnnotationLayers(highlighted, renderViewport, { ...opts, getStyle: style, idPrefix: 'highlight' })
+      : [];
+
+    submitLayers();
+  }
+
+  /** Call whenever the set of selected/hovered ids changes - cheap, independent of total annotation count. **/
+  const setHighlighted = (ids: Iterable<string>) => {
+    highlightedIds = ids;
+    if (!highlightFrameScheduled) {
+      highlightFrameScheduled = true;
+      requestAnimationFrame(rebuildHighlightLayer);
+    }
+  }
+
+  /**
+   * Cheap camera-only update for pan/zoom - touches no annotation data, no
+   * spatial index, at all. Deliberately synchronous, in the same pass as
+   * the viewer's own paint for this frame: deferring it through a
+   * `requestAnimationFrame` would add a full frame of lag between what the
+   * viewer just painted and what this overlay catches up to - visible as
+   * the overlay trailing behind the image during a drag or zoom.
+   */
   const paintCamera = () => {
-    const __t0 = performance.now();
     const { bounds, resolution } = adapter.getRenderViewport();
 
     const center: [number, number] = [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2];
@@ -255,9 +326,6 @@ export const createDeckRenderLoop = <Img>(
 
     deck.setProps({ initialViewState: { target: [center[0], center[1], 0], zoom } });
     deck.redraw();
-    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0 };
-    (window as any).__renderLoopDebug.paintCamera++;
-    (window as any).__renderLoopDebug.paintCameraMs += performance.now() - __t0;
   }
 
   /** Recomputes which committed annotations currently intersect the viewport - the one thing that still needs an index query, kept off the per-frame path (see `scheduleSettledRefresh`). **/
@@ -289,11 +357,12 @@ export const createDeckRenderLoop = <Img>(
 
   // Coalesces rapid-fire triggers within the same animation frame (many
   // draft updates during one drag gesture, tool hints on every mousemove,
-  // images added/removed, style/filter/selection/hover changes) into a
-  // single rebuild. `committedDirty`/`draftsDirty` track which cache(s) (if
-  // any) need refreshing first - `rebuildLayers` always runs, since a
-  // filter/style/hint/selection/hover change needs it even when neither
-  // cache is stale.
+  // images added/removed, resize, filter/style changes) into a single
+  // rebuild of the *base* layers. `committedDirty`/`draftsDirty` track
+  // which cache(s) (if any) need refreshing first - `rebuildLayers` always
+  // runs, since a filter/style/hint change needs it even when neither cache
+  // is stale. Selection/hover changes deliberately do NOT go through this -
+  // see `setHighlighted`.
   let committedDirty = false;
   let draftsDirty = false;
   let frameScheduled = false;
@@ -324,8 +393,6 @@ export const createDeckRenderLoop = <Img>(
 
   /** Call on every pan/zoom frame - the only thing on the per-frame path. **/
   const notifyViewportChanged = () => {
-    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0, notify: 0 };
-    (window as any).__renderLoopDebug.notify = ((window as any).__renderLoopDebug.notify || 0) + 1;
     resize();
     paintCamera();
     scheduleSettledRefresh();
@@ -345,7 +412,14 @@ export const createDeckRenderLoop = <Img>(
   //
   // `Store.observe` (unlike nanostores' `.listen()`) has no return-value
   // unsubscribe - `unobserve` needs the exact same callback reference back.
-  const onStoreChange = () => { rebuildCommitted(); rebuildLayers(); updateViewportIntersect(); }
+  const onStoreChange = ({ changes }: StoreChangeEvent<SpatialAnnotation>) => {
+    (changes.created || []).forEach(patchCommitted);
+    (changes.updated || []).forEach(({ newValue }) => patchCommitted(newValue));
+    (changes.deleted || []).forEach(a => removeCommitted(a.id));
+
+    rebuildLayers();
+    updateViewportIntersect();
+  }
   store.observe(onStoreChange);
 
   // Coalesced, not synchronous: unlike a store change during an editor
@@ -389,6 +463,7 @@ export const createDeckRenderLoop = <Img>(
     notifyViewportChanged,
     refresh,
     render: scheduleFrame,
+    setHighlighted,
     setHints,
     setVisible
   };

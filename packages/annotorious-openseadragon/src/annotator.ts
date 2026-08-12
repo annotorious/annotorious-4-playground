@@ -163,7 +163,7 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
         success: (event: { item: OpenSeadragon.TiledImage }) => {
           imageRegistry.register(event.item, source);
           imageIndexes.rebuild(source);
-          deckOverlay.render();
+          deckOverlay.refresh();
           resolve();
         },
         error: (error: unknown) => reject(error)

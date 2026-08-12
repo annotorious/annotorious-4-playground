@@ -19,8 +19,8 @@ import { eventToWorld, worldToPixel } from './viewport';
 
 /** World (viewport) units per one local (image pixel) unit. **/
 export const imageScale = (tiledImage: OpenSeadragon.TiledImage): number => {
-  const p0 = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(0, 0));
-  const p1 = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(1, 0));
+  const p0 = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(0, 0), true);
+  const p1 = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(1, 0), true);
   return Math.hypot(p1.x - p0.x, p1.y - p0.y);
 }
 
@@ -37,18 +37,18 @@ export const screenPixelsToLocalUnits = (worldResolution: number, tiledImage: Op
 export const shapeToWorld = (tiledImage: OpenSeadragon.TiledImage, shape: SpatialShape): SpatialShape => {
   switch (shape.type) {
     case ShapeType.POINT: {
-      const w = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(shape.geometry.x, shape.geometry.y));
+      const w = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(shape.geometry.x, shape.geometry.y), true);
       return createPoint(w.x, w.y);
     }
     case ShapeType.POLYGON: {
       const points = shape.geometry.points.map(([x, y]) => {
-        const w = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(x, y));
+        const w = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(x, y), true);
         return [w.x, w.y] as [number, number];
       });
       return createPolygon(points);
     }
     case ShapeType.BOX: {
-      const origin = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(shape.geometry.x, shape.geometry.y));
+      const origin = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(shape.geometry.x, shape.geometry.y), true);
       const scale = imageScale(tiledImage);
       return createBox(origin.x, origin.y, shape.geometry.w * scale, shape.geometry.h * scale, shape.geometry.rot);
     }
@@ -68,7 +68,7 @@ export const worldBoundsToLocal = (tiledImage: OpenSeadragon.TiledImage, bounds:
     [bounds.maxX, bounds.maxY], [bounds.minX, bounds.maxY]
   ];
 
-  const local = corners.map(([x, y]) => tiledImage.viewportToImageCoordinates(new OpenSeadragon.Point(x, y)));
+  const local = corners.map(([x, y]) => tiledImage.viewportToImageCoordinates(new OpenSeadragon.Point(x, y), true));
   const xs = local.map(p => p.x);
   const ys = local.map(p => p.y);
 
@@ -85,7 +85,7 @@ export const worldBoundsToLocal = (tiledImage: OpenSeadragon.TiledImage, bounds:
 export const createImageTransforms = (viewer: OpenSeadragon.Viewer, tiledImage: OpenSeadragon.TiledImage) => {
   const toLocalCoordinates = (event: PointerEvent): [number, number] => {
     const world = eventToWorld(viewer, event);
-    const local = tiledImage.viewportToImageCoordinates(world);
+    const local = tiledImage.viewportToImageCoordinates(world, true);
     return [local.x, local.y];
   }
 

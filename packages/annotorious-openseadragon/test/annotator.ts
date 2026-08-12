@@ -16,7 +16,10 @@ const viewer = OpenSeadragon({
   id: 'openseadragon',
   prefixUrl: 'https://cdn.jsdelivr.net/npm/openseadragon@6/build/openseadragon/images/',
   showNavigationControl: false,
-  tileSources: IMAGE_1
+  tileSources: IMAGE_1,
+  gestureSettingsMouse: {
+    clickToZoom: false
+  }
 });
 
 const anno = createOSDAnnotator(viewer, { multiSelect: true });

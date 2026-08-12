@@ -46,7 +46,7 @@ export const createPointerHandling = <E>(
     const index = imageIndexes.get(registered.source);
     if (!index) return undefined;
 
-    const local = registered.tiledImage.viewportToImageCoordinates(worldPoint);
+    const local = registered.tiledImage.viewportToImageCoordinates(worldPoint, true);
     const resolution = getRenderViewport(viewer).resolution;
     const buffer = screenPixelsToLocalUnits(resolution, registered.tiledImage, HIT_BUFFER_PX);
 

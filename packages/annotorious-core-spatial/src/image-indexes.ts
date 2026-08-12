@@ -40,7 +40,24 @@ export const createImageIndexes = (store: Store<SpatialAnnotation>) => {
   }
 
   store.observe(({ changes }) => {
-    (changes.created || []).forEach(a => indexFor(a.target.source).insert(a.target));
+    const created = changes.created || [];
+    if (created.length > 0) {
+      // Bulk-load per source rather than inserting one at a time - a batch
+      // of thousands of new annotations (e.g. a bulk `setAnnotations` call)
+      // would otherwise mean thousands of sequential RBush inserts, which is
+      // both slower to build *and* produces a worse-balanced tree than a
+      // bulk load - degrading every viewport/hit-test query against it for
+      // as long as that data lives in the index. `set(..., false)` merges
+      // in without clearing what's already there (see spatial-index.ts).
+      const bySource = new Map<string | undefined, SpatialAnnotationTarget[]>();
+      created.forEach(a => {
+        const targets = bySource.get(a.target.source);
+        if (targets) targets.push(a.target);
+        else bySource.set(a.target.source, [a.target]);
+      });
+
+      bySource.forEach((targets, source) => indexFor(source).set(targets, false));
+    }
 
     (changes.deleted || []).forEach(a => indexFor(a.target.source).remove(a.target));
 

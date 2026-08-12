@@ -101,7 +101,20 @@ export const buildAnnotationLayers = <T extends SpatialAnnotationTarget>(
     (bucket === 'simplified' ? simplified : full).push(target);
   }
 
-  const style = (target: T): Required<RenderStyle> => ({ ...DEFAULT_STYLE, ...opts.getStyle?.(target) });
+  // Memoized per candidate - deck.gl calls getFillColor/getLineColor/
+  // getLineWidth as three independent accessors, and opts.getStyle is
+  // typically not free (a store lookup, at minimum), so without this a
+  // visible shape's style would get computed three times per render instead
+  // of once.
+  const styles = new Map<T, Required<RenderStyle>>();
+  const style = (target: T): Required<RenderStyle> => {
+    let computed = styles.get(target);
+    if (!computed) {
+      computed = { ...DEFAULT_STYLE, ...opts.getStyle?.(target) };
+      styles.set(target, computed);
+    }
+    return computed;
+  }
 
   const layers: Layer[] = [];
 

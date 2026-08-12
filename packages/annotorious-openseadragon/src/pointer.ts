@@ -1,9 +1,9 @@
 import type OpenSeadragon from 'openseadragon';
 import { getTool } from '@annotorious/core-spatial';
-import type { DrawingTool, SpatialAnnotation, SpatialAnnotationTarget, SpatialShape, ToolContext } from '@annotorious/core-spatial';
+import type { DraftStore, DrawingTool, SpatialAnnotation, SpatialAnnotationTarget, SpatialShape, ToolContext, ToolHint } from '@annotorious/core-spatial';
 import type { AnnotatorState, Filter } from '@annotorious/core';
 import { createImageTransforms, screenPixelsToLocalUnits } from './coordinates';
-import { DRAFT_ANNOTATION_ID } from './deck-overlay';
+import { draftAnnotationId, LOCAL_AUTHOR_ID } from './draft';
 import { eventToWorld, getRenderViewport } from './viewport';
 import type { ImageIndexes } from './image-indexes';
 import type { ImageRegistry } from './image-registry';
@@ -14,8 +14,14 @@ export interface PointerHandlingOptions {
 
   multiSelect?: boolean;
 
-  /** Called with the shape-in-progress (or undefined once there isn't one) - lets the host render a live preview. **/
-  onDraftChange?: (target: SpatialAnnotationTarget | undefined) => void;
+  /**
+   * Called whenever the drawing tool's local hint set changes (or is
+   * cleared), together with the `source` id of the image being drawn on -
+   * lets the host render them (see `deck-overlay.ts`'s `setHints`). Purely
+   * local UX, deliberately not routed through `DraftStore` - see
+   * `tool-hint.ts`.
+   */
+  onHint?: (hints: ToolHint[], source: string | undefined) => void;
 
   /** Read fresh on every hit-test - lets `setFilter` take effect without recreating pointer handling. **/
   getFilter?: () => Filter<SpatialAnnotation> | undefined;
@@ -31,6 +37,7 @@ export const createPointerHandling = <E>(
   state: AnnotatorState<SpatialAnnotation, E>,
   imageRegistry: ImageRegistry,
   imageIndexes: ImageIndexes,
+  draftStore: DraftStore<SpatialAnnotationTarget>,
   opts: PointerHandlingOptions = {}
 ) => {
   const { store, selection, hover } = state;
@@ -64,7 +71,8 @@ export const createPointerHandling = <E>(
     activeTool?.destroy();
     activeTool = undefined;
     viewer.setMouseNavEnabled(true);
-    opts.onDraftChange?.(undefined);
+    draftStore.set(LOCAL_AUTHOR_ID, undefined);
+    opts.onHint?.([], undefined);
   }
 
   const startDrawing = (event: PointerEvent) => {
@@ -91,8 +99,8 @@ export const createPointerHandling = <E>(
     const ctx: ToolContext<SpatialShape> = {
       toLocalCoordinates,
       onChange: (shape: SpatialShape | undefined) => {
-        opts.onDraftChange?.(shape
-          ? { annotation: DRAFT_ANNOTATION_ID, selector: shape, ...(source ? { source } : {}) }
+        draftStore.set(LOCAL_AUTHOR_ID, shape
+          ? { annotation: draftAnnotationId(LOCAL_AUTHOR_ID), selector: shape, ...(source ? { source } : {}) }
           : undefined);
       },
       onComplete: (shape: SpatialShape) => {
@@ -100,7 +108,8 @@ export const createPointerHandling = <E>(
         const target: SpatialAnnotationTarget = { annotation: id, selector: shape, ...(source ? { source } : {}) };
         store.addAnnotation({ id, bodies: [], target });
         endDrawingSession();
-      }
+      },
+      onHint: (hints: ToolHint[]) => opts.onHint?.(hints, source)
     };
 
     activeTool = factory(ctx);

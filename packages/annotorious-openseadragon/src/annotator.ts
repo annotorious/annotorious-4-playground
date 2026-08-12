@@ -13,7 +13,7 @@ import type {
   User,
   UserSelectActionExpression
 } from '@annotorious/core';
-import { listTools } from '@annotorious/core-spatial';
+import { createDraftStore, listTools } from '@annotorious/core-spatial';
 import type { LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget } from '@annotorious/core-spatial';
 import { toRenderStyle } from './color';
 import { createDeckOverlay } from './deck-overlay';
@@ -84,6 +84,12 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
   const imageRegistry = createImageRegistry(viewer);
   const imageIndexes = createImageIndexes(store);
 
+  // This session's own in-progress drawing (and, in a collaborative setup,
+  // other authors' too) - see draft-store.ts. Shared between pointer
+  // handling (writes the local entry as the shape develops) and the deck
+  // overlay (renders whatever's currently in it).
+  const draftStore = createDraftStore<SpatialAnnotationTarget>();
+
   // Populate indexes for whatever's already in the world - the common
   // single-image case (opened via `tileSources`) needs no further setup.
   imageRegistry.all().forEach(({ source }) => imageIndexes.rebuild(source));
@@ -103,16 +109,16 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
 
   const getFilter = () => currentFilter;
 
-  const deckOverlay = createDeckOverlay(viewer, store, imageRegistry, imageIndexes, {
+  const deckOverlay = createDeckOverlay(viewer, store, imageRegistry, imageIndexes, draftStore, {
     getStyle,
     getFilter,
     ...(opts.lod ? { lod: opts.lod } : {})
   });
 
-  const pointerHandling = createPointerHandling(viewer, state, imageRegistry, imageIndexes, {
+  const pointerHandling = createPointerHandling(viewer, state, imageRegistry, imageIndexes, draftStore, {
     ...(opts.multiSelect !== undefined ? { multiSelect: opts.multiSelect } : {}),
     getFilter,
-    onDraftChange: target => deckOverlay.setDraft(target, target ? imageRegistry.get(target.source) : undefined)
+    onHint: (hints, source) => deckOverlay.setHints(hints, imageRegistry.get(source))
   });
 
   const editorOverlay = createEditorOverlay(viewer, state, imageRegistry, {

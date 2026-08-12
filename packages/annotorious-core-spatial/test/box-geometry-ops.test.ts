@@ -1,38 +1,60 @@
 import { describe, expect, it } from 'vitest';
-import { createBox } from '../src/geometry';
+import { boxCorners, createBox } from '../src/geometry';
 import { moveBox, resizeBoxByCorner, rotateBoxTowards } from '../src/tools/box-geometry-ops';
 
 describe('resizeBoxByCorner', () => {
 
   it('resizes an axis-aligned box, keeping the opposite corner fixed', () => {
     const box = createBox(0, 0, 100, 100);
-    const resized = resizeBoxByCorner(box, 'se', [150, 120]);
+    // se corner starts at (100,100) - drag it out to (150,120)
+    const resized = resizeBoxByCorner(box, 'se', [50, 20]);
 
     expect(resized.geometry).toMatchObject({ x: 0, y: 0, w: 150, h: 120 });
   });
 
   it('flips correctly when dragging a corner past the opposite one', () => {
     const box = createBox(0, 0, 100, 100);
-    // Dragging the se corner up past the nw corner (0,0)
-    const resized = resizeBoxByCorner(box, 'se', [-20, -10]);
+    // se corner (100,100) dragged up past the nw corner, to (-20,-10)
+    const resized = resizeBoxByCorner(box, 'se', [-120, -110]);
 
     expect(resized.geometry).toMatchObject({ x: -20, y: -10, w: 20, h: 10 });
   });
 
   it('resizes a rotated box along its own local axes, not the screen axes', () => {
-    // 90-degree rotated box: its own "local" x axis now points in world +y,
-    // and its local y axis points in world -x (given our rotation convention)
-    const box = createBox(0, 0, 100, 100, Math.PI / 2);
+    // 30-degree rotated box. A delta exactly along the box's own local +x
+    // axis (i.e. the world-space direction (cos30, sin30)) should change
+    // only its width, never its height.
+    const box = createBox(0, 0, 100, 100, Math.PI / 6);
+    const delta: [number, number] = [50 * Math.cos(Math.PI / 6), 50 * Math.sin(Math.PI / 6)];
 
-    // The box's own se corner (local frame: 100,100) - after a 90-degree
-    // rotation around the center (50,50) - lands at world (0, 100).
-    const seCornerWorld: [number, number] = [0, 100];
-    const resized = resizeBoxByCorner(box, 'se', seCornerWorld);
+    const resized = resizeBoxByCorner(box, 'se', delta);
 
-    // Dragging the box's own se corner exactly onto itself should be a no-op
-    expect(resized.geometry.w).toBeCloseTo(100, 6);
+    expect(resized.geometry.w).toBeCloseTo(150, 6);
     expect(resized.geometry.h).toBeCloseTo(100, 6);
-    expect(resized.geometry.rot).toBeCloseTo(Math.PI / 2, 6);
+    expect(resized.geometry.rot).toBeCloseTo(Math.PI / 6, 6);
+  });
+
+  it('keeps the anchor corner fixed in WORLD space across an entire gesture, not just one call', () => {
+    // Regression test for the "swimming" bug: resizing must always be
+    // computed from the shape as it was when the drag *started* (initialBox),
+    // never from a previous call's result - otherwise the rotation pivot
+    // (the box's center) silently shifts between calls, and an anchor that
+    // stays fixed in *local* terms drifts in *world* terms as soon as the
+    // box is rotated.
+    const initialBox = createBox(0, 0, 100, 100, Math.PI / 6); // 30 degrees
+    const expectedAnchor = boxCorners(initialBox.geometry)[0]; // nw - opposite of se
+
+    // Simulate a real multi-frame drag: same initialBox every time, growing
+    // cumulative delta - exactly how the editor actually calls this.
+    const deltas: [number, number][] = [[10, 5], [35, 20], [70, 45], [120, 80]];
+
+    for (const delta of deltas) {
+      const resized = resizeBoxByCorner(initialBox, 'se', delta);
+      const anchor = boxCorners(resized.geometry)[0];
+
+      expect(anchor[0]).toBeCloseTo(expectedAnchor[0], 6);
+      expect(anchor[1]).toBeCloseTo(expectedAnchor[1], 6);
+    }
   });
 
 });

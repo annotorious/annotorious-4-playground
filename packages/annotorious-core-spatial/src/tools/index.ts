@@ -6,6 +6,8 @@ export * from './drawing-tool';
 export * from './point-editor';
 export * from './point-tool';
 export * from './polygon-editor';
+export * from './polygon-geometry-ops';
 export * from './polygon-tool';
 export * from './shape-editor';
 export * from './snapping';
+export * from './tool-hint';

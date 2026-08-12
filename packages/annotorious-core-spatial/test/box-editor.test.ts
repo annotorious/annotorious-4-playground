@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBox } from '../src/geometry';
+import { boxCorners, createBox } from '../src/geometry';
 import { createBoxEditor } from '../src/tools/box-editor';
 import type { EditorContext } from '../src/tools/shape-editor';
 
@@ -80,6 +80,46 @@ describe('box editor', () => {
 
     se.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: 150, clientY: 120, bubbles: true }));
 
+    editor.destroy();
+  });
+
+  it('keeps the anchor corner fixed through a multi-step resize drag on a rotated box (regression)', () => {
+    const ctx = makeContext();
+    const editor = createBoxEditor(ctx);
+
+    const initial = createBox(0, 0, 100, 100, Math.PI / 6); // 30 degrees
+    const expectedAnchor = boxCorners(initial.geometry)[0]; // nw - opposite of se
+
+    editor.mount(container, initial, IDENTITY);
+
+    const se = [...container.querySelectorAll('[role="button"]')]
+      .find(h => h.getAttribute('aria-label') === 'Resize handle, bottom-right corner') as HTMLElement;
+    se.setPointerCapture = vi.fn();
+    se.releasePointerCapture = vi.fn();
+
+    // The se handle's own screen position, at the actual (rotated) se corner
+    const seStart = boxCorners(initial.geometry)[2];
+
+    se.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 1, clientX: seStart[0], clientY: seStart[1], bubbles: true }));
+
+    // Several successive moves, further and further from the start - exactly
+    // how a real drag calls this repeatedly while the gesture is in progress.
+    // NOTE: this deliberately does NOT call editor.update() in between, the
+    // same way the real synchronous render pipeline wouldn't introduce any
+    // extra state between one pointermove and the next.
+    for (const [dx, dy] of [[10, 5], [25, 15], [40, 30]]) {
+      se.dispatchEvent(new PointerEvent('pointermove', {
+        pointerId: 1, clientX: seStart[0] + dx, clientY: seStart[1] + dy, bubbles: true
+      }));
+
+      const lastShape = ctx.onChange.mock.calls.at(-1)![0];
+      const anchor = boxCorners(lastShape.geometry)[0];
+
+      expect(anchor[0]).toBeCloseTo(expectedAnchor[0], 6);
+      expect(anchor[1]).toBeCloseTo(expectedAnchor[1], 6);
+    }
+
+    se.dispatchEvent(new PointerEvent('pointerup', { pointerId: 1, clientX: seStart[0] + 40, clientY: seStart[1] + 30, bubbles: true }));
     editor.destroy();
   });
 

@@ -10,10 +10,11 @@ import type { ToolContext } from '../src/tools/drawing-tool';
 const pointerEvent = (x: number, y: number) => ({ clientX: x, clientY: y }) as PointerEvent;
 const keyEvent = (key: string) => ({ key }) as KeyboardEvent;
 
-const makeContext = <S,>(): ToolContext<S> & { onChange: ReturnType<typeof vi.fn>, onComplete: ReturnType<typeof vi.fn> } => ({
+const makeContext = <S,>(): ToolContext<S> & { onChange: ReturnType<typeof vi.fn>, onComplete: ReturnType<typeof vi.fn>, onHint: ReturnType<typeof vi.fn> } => ({
   toLocalCoordinates: (event: PointerEvent) => [event.clientX, event.clientY],
   onChange: vi.fn(),
-  onComplete: vi.fn()
+  onComplete: vi.fn(),
+  onHint: vi.fn()
 });
 
 describe('box tool', () => {
@@ -164,6 +165,71 @@ describe('polygon tool', () => {
     expect(ctx.onChange).toHaveBeenLastCalledWith(undefined);
     tool.onKeyDown!(keyEvent('Enter'));
     expect(ctx.onComplete).not.toHaveBeenCalled();
+  });
+
+  it('shows a default-variant marker at the first vertex once drawing starts', () => {
+    const ctx = makeContext<any>();
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+
+    expect(ctx.onHint).toHaveBeenLastCalledWith([
+      { type: 'point', position: [0, 0], variant: 'default' }
+    ]);
+  });
+
+  it('adds a dashed live edge from the last vertex to the cursor on pointermove', () => {
+    const ctx = makeContext<any>();
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onPointerDown(pointerEvent(100, 0));
+    tool.onPointerMove(pointerEvent(60, 40));
+
+    expect(ctx.onHint).toHaveBeenLastCalledWith([
+      { type: 'point', position: [0, 0], variant: 'default' },
+      { type: 'line', from: [100, 0], to: [60, 40], dashed: true }
+    ]);
+  });
+
+  it('switches the marker to the active variant once the cursor is within closing range', () => {
+    const ctx = makeContext<any>();
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onPointerDown(pointerEvent(100, 0));
+    tool.onPointerDown(pointerEvent(50, 100));
+
+    tool.onPointerMove(pointerEvent(60, 40)); // far from (0,0)
+    expect(ctx.onHint).toHaveBeenLastCalledWith([
+      { type: 'point', position: [0, 0], variant: 'default' },
+      { type: 'line', from: [50, 100], to: [60, 40], dashed: true }
+    ]);
+
+    tool.onPointerMove(pointerEvent(2, 2)); // within CLOSE_THRESHOLD_PX of (0,0)
+    expect(ctx.onHint).toHaveBeenLastCalledWith([
+      { type: 'point', position: [0, 0], variant: 'active' },
+      { type: 'line', from: [50, 100], to: [2, 2], dashed: true }
+    ]);
+  });
+
+  it('clears all hints on close, cancel and Backspace-to-empty', () => {
+    const ctx = makeContext<any>();
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onPointerDown(pointerEvent(100, 0));
+    tool.onPointerDown(pointerEvent(50, 100));
+    tool.onPointerDown(pointerEvent(2, 2)); // closes
+    expect(ctx.onHint).toHaveBeenLastCalledWith([]);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onKeyDown!(keyEvent('Escape'));
+    expect(ctx.onHint).toHaveBeenLastCalledWith([]);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onKeyDown!(keyEvent('Backspace')); // only vertex - resets
+    expect(ctx.onHint).toHaveBeenLastCalledWith([]);
   });
 
 });

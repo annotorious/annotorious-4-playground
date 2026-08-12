@@ -1,5 +1,6 @@
 import type { SpatialShape } from '../geometry';
 import type { SnappingProvider } from './snapping';
+import type { ToolHint } from './tool-hint';
 
 export interface ToolContext<S extends SpatialShape = SpatialShape> {
 
@@ -13,6 +14,15 @@ export interface ToolContext<S extends SpatialShape = SpatialShape> {
 
   /** Call when the shape is finished (e.g. on double-click, or after closing a polygon). **/
   onComplete(shape: S): void;
+
+  /**
+   * Call whenever the set of local drawing aids changes - the full current
+   * set, not a diff, mirroring `onChange`'s "here's the current state"
+   * shape. Pass an empty array (not omit the call) to clear every hint,
+   * e.g. on cancel/complete. Optional: a tool with no hints of its own
+   * simply never calls this.
+   */
+  onHint?(hints: ToolHint[]): void;
 
 }
 

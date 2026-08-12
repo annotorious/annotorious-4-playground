@@ -1,6 +1,6 @@
 import OpenSeadragon from 'openseadragon';
 import { createBox, createPoint, createPolygon, ShapeType } from '@annotorious/core-spatial';
-import type { Bounds, EditorTransform, SpatialAnnotationTarget, SpatialShape } from '@annotorious/core-spatial';
+import type { Bounds, EditorTransform, SpatialAnnotationTarget, SpatialShape, ToolHint } from '@annotorious/core-spatial';
 import { eventToWorld, worldToPixel } from './viewport';
 
 /**
@@ -60,6 +60,18 @@ export const targetToWorld = <T extends SpatialAnnotationTarget>(tiledImage: Ope
   ...target,
   selector: shapeToWorld(tiledImage, target.selector)
 });
+
+/** A tool hint in one image's local pixel space -> the same hint, coordinates expressed in world space. **/
+export const hintToWorld = (tiledImage: OpenSeadragon.TiledImage, hint: ToolHint): ToolHint => {
+  const toWorld = (point: [number, number]): [number, number] => {
+    const w = tiledImage.imageToViewportCoordinates(new OpenSeadragon.Point(point[0], point[1]), true);
+    return [w.x, w.y];
+  }
+
+  return hint.type === 'point'
+    ? { ...hint, position: toWorld(hint.position) }
+    : { ...hint, from: toWorld(hint.from), to: toWorld(hint.to) };
+}
 
 /** World-space bounds -> the equivalent bounds in one image's local pixel space (for querying that image's own index). **/
 export const worldBoundsToLocal = (tiledImage: OpenSeadragon.TiledImage, bounds: Bounds): Bounds => {

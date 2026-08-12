@@ -1,9 +1,10 @@
 import type OpenSeadragon from 'openseadragon';
 import { Deck, OrthographicView } from '@deck.gl/core';
-import { buildAnnotationLayers, markAsApplicationRegion } from '@annotorious/core-spatial';
-import type { LODOptions, RenderStyle, SpatialAnnotation, SpatialAnnotationTarget } from '@annotorious/core-spatial';
+import { buildAnnotationLayers, buildHintLayers, markAsApplicationRegion } from '@annotorious/core-spatial';
+import type { DraftStore, LODOptions, RenderStyle, SpatialAnnotation, SpatialAnnotationTarget, ToolHint } from '@annotorious/core-spatial';
 import type { Filter, Store } from '@annotorious/core';
-import { targetToWorld, worldBoundsToLocal } from './coordinates';
+import { hintToWorld, targetToWorld, worldBoundsToLocal } from './coordinates';
+import { isDraftAnnotationId } from './draft';
 import { getRenderViewport } from './viewport';
 import type { ImageIndexes } from './image-indexes';
 import type { ImageRegistry } from './image-registry';
@@ -18,9 +19,6 @@ export interface DeckOverlayOptions {
   lod?: LODOptions;
 
 }
-
-/** Fixed id for the shape currently being drawn, styled distinctly and never confused with a real annotation. **/
-export const DRAFT_ANNOTATION_ID = '__annotorious-draft__';
 
 const DRAFT_STYLE: RenderStyle = { fillColor: [26, 115, 232, 60], lineColor: [26, 115, 232, 255], lineWidth: 2 };
 
@@ -37,6 +35,7 @@ export const createDeckOverlay = (
   store: Store<SpatialAnnotation>,
   imageRegistry: ImageRegistry,
   imageIndexes: ImageIndexes,
+  draftStore: DraftStore<SpatialAnnotationTarget>,
   opts: DeckOverlayOptions = {}
 ) => {
   let containerWidth = 0;
@@ -70,11 +69,11 @@ export const createDeckOverlay = (
     }
   }
 
-  let draft: { target: SpatialAnnotationTarget, tiledImage: OpenSeadragon.TiledImage } | undefined;
+  let hintState: { hints: ToolHint[], tiledImage: OpenSeadragon.TiledImage } | undefined;
 
-  /** The shape currently being drawn (if any), not yet a real annotation - see `setDraft`. **/
-  const setDraft = (target: SpatialAnnotationTarget | undefined, tiledImage?: OpenSeadragon.TiledImage) => {
-    draft = (target && tiledImage) ? { target, tiledImage } : undefined;
+  /** The active drawing tool's local hints (if any) - see `tool-hint.ts`. Unlike drafts, purely local: never read from `draftStore`. **/
+  const setHints = (hints: ToolHint[], tiledImage?: OpenSeadragon.TiledImage) => {
+    hintState = (hints.length > 0 && tiledImage) ? { hints, tiledImage } : undefined;
     scheduleRender();
   }
 
@@ -97,20 +96,30 @@ export const createDeckOverlay = (
       return targets.map(target => targetToWorld(tiledImage, target));
     });
 
-    // The draft is drawn regardless of whether it currently falls within
-    // worldBounds - it's actively being interacted with, so it should never
-    // pop in/out because a corner briefly left the viewport during a drag.
-    const withDraft = draft ? [...committed, targetToWorld(draft.tiledImage, draft.target)] : committed;
-    return withDraft;
+    // Drafts (this session's own in-progress shape, and - in a
+    // collaborative setup - other authors' too, see draft-store.ts) are
+    // drawn regardless of whether they currently fall within worldBounds -
+    // they're actively being interacted with, so they should never pop
+    // in/out because a corner briefly left the viewport during a drag.
+    const drafts = draftStore.all().flatMap(({ target }) => {
+      const tiledImage = imageRegistry.get(target.source);
+      return tiledImage ? [targetToWorld(tiledImage, target)] : [];
+    });
+
+    return [...committed, ...drafts];
   }
 
   const style = (target: SpatialAnnotationTarget): RenderStyle | undefined =>
-    target.annotation === DRAFT_ANNOTATION_ID ? DRAFT_STYLE : opts.getStyle?.(target);
+    isDraftAnnotationId(target.annotation) ? DRAFT_STYLE : opts.getStyle?.(target);
 
   const render = () => {
     const viewport = getRenderViewport(viewer);
     const candidates = gatherCandidates(viewport.bounds);
     const layers = buildAnnotationLayers(candidates, viewport, { ...opts, getStyle: style });
+
+    const hintLayers = hintState
+      ? buildHintLayers(hintState.hints.map(h => hintToWorld(hintState!.tiledImage, h)))
+      : [];
 
     const center = viewer.viewport.getCenter(true);
     // deck.gl zoom Z means "screenPixels = worldUnits * 2^Z" - derived directly
@@ -120,7 +129,7 @@ export const createDeckOverlay = (
 
     deck.setProps({
       initialViewState: { target: [center.x, center.y, 0], zoom },
-      layers
+      layers: [...layers, ...hintLayers]
     });
 
     deck.redraw();
@@ -169,6 +178,13 @@ export const createDeckOverlay = (
   const onStoreChange = () => render();
   store.observe(onStoreChange);
 
+  // Coalesced, not synchronous: unlike a store change during an editor
+  // drag, there's no separately-rendered DOM overlay a draft needs to stay
+  // in lockstep with (drawing tools render no DOM of their own - see
+  // drawing-tool.ts), so the same per-frame coalescing as other
+  // not-already-frame-gated triggers is enough here.
+  const unsubscribeDrafts = draftStore.subscribe(() => scheduleRender());
+
   const destroy = () => {
     viewer.removeHandler('update-viewport', onUpdateViewport);
     viewer.removeHandler('open', onOpen);
@@ -176,6 +192,7 @@ export const createDeckOverlay = (
     viewer.world.removeHandler('remove-item', onWorldChange);
     window.removeEventListener('resize', onWindowResize);
     store.unobserve(onStoreChange);
+    unsubscribeDrafts();
     deck.finalize();
     canvasdiv.remove();
   }
@@ -183,6 +200,6 @@ export const createDeckOverlay = (
   resize();
   render();
 
-  return { canvasdiv, deck, destroy, render: scheduleRender, setDraft };
+  return { canvasdiv, deck, destroy, render: scheduleRender, setHints };
 
 }

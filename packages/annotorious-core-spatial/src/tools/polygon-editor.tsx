@@ -1,7 +1,8 @@
-import { createSignal, For } from 'solid-js';
+import { createSignal, Index } from 'solid-js';
 import { render } from 'solid-js/web';
 import { createPolygon } from '../geometry';
 import type { Polygon } from '../geometry';
+import { movePolygon } from './polygon-geometry-ops';
 import type { EditorContext, EditorTransform, ShapeEditor, ShapeEditorFactory } from './shape-editor';
 
 const HANDLE_SIZE = 8; // constant screen pixels
@@ -43,6 +44,76 @@ const PolygonHandles = (props: { shape: () => Polygon, transform: () => EditorTr
   const withoutVertex = (index: number) => {
     const points = props.shape().geometry.points.filter((_, i) => i !== index);
     return createPolygon(points);
+  }
+
+  const startBodyDrag = (downEvent: PointerEvent) => {
+    ctx.onDragStart?.();
+
+    const target = downEvent.currentTarget as HTMLElement;
+    target.setPointerCapture(downEvent.pointerId);
+
+    let last = ctx.toLocalCoordinates(downEvent);
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const local = ctx.toLocalCoordinates(moveEvent);
+      const dx = local[0] - last[0];
+      const dy = local[1] - last[1];
+      last = local;
+      ctx.onChange(movePolygon(props.shape(), dx, dy));
+    }
+
+    const onUp = (upEvent: PointerEvent) => {
+      target.releasePointerCapture(upEvent.pointerId);
+      target.removeEventListener('pointermove', onMove);
+      target.removeEventListener('pointerup', onUp);
+      ctx.onDragEnd?.();
+    }
+
+    target.addEventListener('pointermove', onMove);
+    target.addEventListener('pointerup', onUp);
+  }
+
+  const onBodyKeyDown = (event: KeyboardEvent) => {
+    const delta: Record<string, [number, number]> = {
+      ArrowUp: [0, -NUDGE], ArrowDown: [0, NUDGE], ArrowLeft: [-NUDGE, 0], ArrowRight: [NUDGE, 0]
+    };
+
+    const d = delta[event.key];
+    if (!d) return;
+    event.preventDefault();
+
+    ctx.onChange(movePolygon(props.shape(), d[0], d[1]));
+  }
+
+  // Drag-to-move hit region matching the polygon's own shape, not just its
+  // bounding box - a plain rect would let drags starting in the box's empty
+  // corners fall through and move the shape unexpectedly. clip-path keeps
+  // this to plain HTML/CSS (points as percentages of the bounding box)
+  // rather than introducing SVG - see box-editor.tsx's lineStyle doc for why
+  // SVG is deliberately avoided here for one-off shapes.
+  const bodyStyle = (): Record<string, string> => {
+    const points = props.shape().geometry.points;
+    const xs = points.map(p => p[0]);
+    const ys = points.map(p => p[1]);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const width = Math.max(...xs) - minX || 1;
+    const height = Math.max(...ys) - minY || 1;
+
+    const clipPoints = points
+      .map(([x, y]) => `${((x - minX) / width) * 100}% ${((y - minY) / height) * 100}%`)
+      .join(', ');
+
+    return {
+      position: 'absolute',
+      left: `${minX}px`,
+      top: `${minY}px`,
+      width: `${width}px`,
+      height: `${height}px`,
+      'clip-path': `polygon(${clipPoints})`,
+      'pointer-events': 'auto',
+      cursor: 'move'
+    };
   }
 
   const startVertexDrag = (index: number) => (downEvent: PointerEvent) => {
@@ -89,18 +160,43 @@ const PolygonHandles = (props: { shape: () => Polygon, transform: () => EditorTr
   }
 
   return (
-    <For each={props.shape().geometry.points}>
-      {(point, index) => (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={`Polygon vertex ${index() + 1} of ${props.shape().geometry.points.length}`}
-          style={handleStyle(point, props.transform().scale)}
-          onPointerDown={startVertexDrag(index())}
-          onKeyDown={onVertexKeyDown(index())}
-        />
-      )}
-    </For>
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="Move shape"
+        style={bodyStyle()}
+        onPointerDown={startBodyDrag}
+        onKeyDown={onBodyKeyDown}
+      />
+      {/*
+        Index, not For: For keys each rendered node by the ITEM's own
+        identity, so a point that gets a new [x, y] reference on every drag
+        frame (see withPoint) reads as "a different item" - it would
+        destroy and recreate that handle's DOM element on every single
+        pointermove. Since the element being dragged is the one holding
+        pointer capture, that recreation silently ends the capture, and the
+        drag dies after one frame. Index keys by array position instead
+        (stable for the whole gesture - only the vertex's own coordinates
+        change, not which slot it occupies), so the same DOM element - and
+        its pointer capture - persists for the full drag, exactly like the
+        box editor's corner handles (which get the same stability for free,
+        since they're keyed off the static `CORNERS` name array rather than
+        off shape data).
+      */}
+      <Index each={props.shape().geometry.points}>
+        {(point, index) => (
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={`Polygon vertex ${index + 1} of ${props.shape().geometry.points.length}`}
+            style={handleStyle(point(), props.transform().scale)}
+            onPointerDown={startVertexDrag(index)}
+            onKeyDown={onVertexKeyDown(index)}
+          />
+        )}
+      </Index>
+    </>
   );
 }
 

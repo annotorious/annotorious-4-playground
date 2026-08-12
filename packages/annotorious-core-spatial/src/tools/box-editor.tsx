@@ -55,10 +55,14 @@ const handleStyle = (localPos: [number, number], scale: number): Record<string, 
 const BoxHandles = (props: { shape: () => Box, transform: () => EditorTransform, ctx: EditorContext<Box> }) => {
   const { ctx } = props;
 
+  const topMidLocal = (): [number, number] => {
+    const { nw, ne } = cornerLocalPositions(props.shape());
+    return [(nw[0] + ne[0]) / 2, (nw[1] + ne[1]) / 2];
+  }
+
   const rotateHandleLocalPosition = (): [number, number] => {
     const { x, y, w, h } = props.shape().geometry;
-    const { nw, ne } = cornerLocalPositions(props.shape());
-    const topMid: [number, number] = [(nw[0] + ne[0]) / 2, (nw[1] + ne[1]) / 2];
+    const topMid = topMidLocal();
 
     const cx = x + w / 2;
     const cy = y + h / 2;
@@ -81,10 +85,17 @@ const BoxHandles = (props: { shape: () => Box, transform: () => EditorTransform,
     const target = downEvent.currentTarget as HTMLElement;
     target.setPointerCapture(downEvent.pointerId);
 
+    // Fixed for the whole gesture, ported from Annotorious v3 - see
+    // resizeBoxByCorner's doc for why this must never be the "current"
+    // (already-resized) shape.
+    const initialShape = props.shape();
+    const origin = ctx.toLocalCoordinates(downEvent);
+
     const onMove = (moveEvent: PointerEvent) => {
       const local = ctx.toLocalCoordinates(moveEvent);
       const snapped = ctx.snapping ? ctx.snapping.snap(local) : local;
-      ctx.onChange(resizeBoxByCorner(props.shape(), corner, snapped));
+      const delta: [number, number] = [snapped[0] - origin[0], snapped[1] - origin[1]];
+      ctx.onChange(resizeBoxByCorner(initialShape, corner, delta));
     }
 
     const onUp = (upEvent: PointerEvent) => {
@@ -134,9 +145,9 @@ const BoxHandles = (props: { shape: () => Box, transform: () => EditorTransform,
     if (!d) return;
     event.preventDefault();
 
-    const current = cornerLocalPositions(props.shape())[corner];
-    const target: [number, number] = [current[0] + d[0], current[1] + d[1]];
-    ctx.onChange(resizeBoxByCorner(props.shape(), corner, target));
+    // A single keypress is its own complete (one-step) gesture, so the
+    // "initial" shape for it is simply the current one.
+    ctx.onChange(resizeBoxByCorner(props.shape(), corner, d));
   }
 
   const onBodyKeyDown = (event: KeyboardEvent) => {
@@ -206,6 +217,47 @@ const BoxHandles = (props: { shape: () => Box, transform: () => EditorTransform,
     };
   }
 
+  // Connector line from the top edge to the rotate handle - ported from
+  // v3's RectangleEditor.svelte: two overlaid lines (a dim solid
+  // background, a dashed white foreground on top) for contrast against any
+  // background. Built as plain HTML/CSS (a zero-height div, its width set
+  // to the segment length, rotated to point at the target) rather than
+  // SVG - the same "position/size in local units, border-width divided by
+  // scale" technique already used for every handle in this file, instead
+  // of introducing SVG's own default-viewport and attribute-setting
+  // quirks for what's otherwise a one-off element.
+  const lineStyle = (from: [number, number], to: [number, number], borderWidth: number, border: string): Record<string, string> => {
+    const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
+    const length = Math.hypot(dx, dy);
+    const angle = Math.atan2(dy, dx);
+
+    return {
+      position: 'absolute',
+      left: `${from[0]}px`,
+      top: `${from[1]}px`,
+      width: `${length}px`,
+      height: '0px',
+      'border-top': `${borderWidth}px ${border}`,
+      'transform-origin': '0 0',
+      transform: `rotate(${angle}rad)`,
+      'pointer-events': 'none'
+    };
+  }
+
+  const RotateHandleConnector = () => {
+    const scale = () => props.transform().scale;
+    const from = () => topMidLocal();
+    const to = () => rotateHandleLocalPosition();
+
+    return (
+      <>
+        <div style={lineStyle(from(), to(), 2.5 / scale(), 'solid #fff')} />
+        <div style={lineStyle(from(), to(), 1.5 / scale(), 'dashed #1a73e8')} />
+      </>
+    );
+  }
+
   return (
     <>
       <div
@@ -216,6 +268,7 @@ const BoxHandles = (props: { shape: () => Box, transform: () => EditorTransform,
         onPointerDown={startBodyDrag}
         onKeyDown={onBodyKeyDown}
       />
+      <RotateHandleConnector />
       <For each={CORNERS}>
         {corner => (
           <div

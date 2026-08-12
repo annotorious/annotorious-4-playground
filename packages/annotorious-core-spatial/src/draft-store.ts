@@ -17,9 +17,9 @@ export interface DraftEntry<T extends SpatialAnnotationTarget = SpatialAnnotatio
  * Observable collection of in-progress (not-yet-committed) annotation
  * targets, keyed by author. This is the extension point for realtime
  * collaborative drawing: a local drawing tool writes its own entry here as
- * the shape develops (see how the OpenSeadragon package's pointer wiring
- * uses it), a rendering layer subscribes to draw whatever's currently in
- * the map, and a collab/presence plugin can do both - subscribe to
+ * the shape develops (see how the OpenSeadragon/OpenLayers packages' pointer
+ * wiring uses it), a rendering layer subscribes to draw whatever's currently
+ * in the map, and a collab/presence plugin can do both - subscribe to
  * broadcast the local entry outward, and write entries for remote users'
  * drafts arriving over the wire so they render locally too, live, the same
  * way the local user's own in-progress shape does.
@@ -64,3 +64,13 @@ export const createDraftStore = <T extends SpatialAnnotationTarget = SpatialAnno
 }
 
 export type DraftStore<T extends SpatialAnnotationTarget = SpatialAnnotationTarget> = ReturnType<typeof createDraftStore<T>>;
+
+/** Fixed author id for this session's own in-progress drawing, as opposed to a remote collaborator's. **/
+export const LOCAL_AUTHOR_ID = '__local__';
+
+const DRAFT_ANNOTATION_PREFIX = '__annotorious-draft__';
+
+/** Fixed (per-author) id for an in-progress annotation target, styled distinctly and never confused with a real annotation. **/
+export const draftAnnotationId = (authorId: string): string => `${DRAFT_ANNOTATION_PREFIX}:${authorId}`;
+
+export const isDraftAnnotationId = (id: string): boolean => id.startsWith(DRAFT_ANNOTATION_PREFIX);

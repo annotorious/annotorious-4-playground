@@ -1,11 +1,11 @@
-import type OpenSeadragon from 'openseadragon';
+import type Map from 'ol/Map.js';
 import { Deck, OrthographicView } from '@deck.gl/core';
 import { buildAnnotationLayers, buildHintLayers, isDraftAnnotationId, markAsApplicationRegion } from '@annotorious/core-spatial';
 import type { DraftStore, ImageIndexes, LODOptions, RenderStyle, SpatialAnnotation, SpatialAnnotationTarget, ToolHint } from '@annotorious/core-spatial';
 import type { Filter, Store } from '@annotorious/core';
 import { hintToWorld, targetToWorld, worldBoundsToLocal } from './coordinates';
 import { getRenderViewport } from './viewport';
-import type { ImageRegistry } from './image-registry';
+import type { ImageRegistry, RegisteredImage } from './image-registry';
 
 export interface DeckOverlayOptions {
 
@@ -21,21 +21,24 @@ export interface DeckOverlayOptions {
 const DRAFT_STYLE: RenderStyle = { fillColor: [26, 115, 232, 60], lineColor: [26, 115, 232, 255], lineWidth: 2 };
 
 /**
- * Owns the DeckGL canvas and render loop. Adapted from
- * https://github.com/ynitto/openseadragon-deckgl-overlay/ - the key change
- * from the original single-image prototype is tracking OSD's own *viewport*
- * coordinate space (shared across every image in the world) rather than one
- * image's pixel space, so this works the same whether there's one image or
- * many, placed anywhere.
+ * Owns the DeckGL canvas and render loop - same structure and reasoning as
+ * the OpenSeadragon package's `deck-overlay.ts`, ported to OpenLayers'
+ * event/API surface. See that file's history for why `update-viewport`/
+ * `postrender` and store changes render *synchronously* rather than through
+ * `scheduleRender`'s requestAnimationFrame coalescing: both are already
+ * frame-gated by the host viewer's own render loop, so deferring through
+ * another RAF would only add a full extra frame of visible lag.
  */
 export const createDeckOverlay = (
-  viewer: OpenSeadragon.Viewer,
+  map: Map,
   store: Store<SpatialAnnotation>,
   imageRegistry: ImageRegistry,
   imageIndexes: ImageIndexes,
   draftStore: DraftStore<SpatialAnnotationTarget>,
   opts: DeckOverlayOptions = {}
 ) => {
+  const viewport = map.getViewport();
+
   let containerWidth = 0;
   let containerHeight = 0;
 
@@ -45,7 +48,7 @@ export const createDeckOverlay = (
   canvasdiv.style.top = '0px';
   canvasdiv.style.width = '100%';
   canvasdiv.style.height = '100%';
-  viewer.canvas.appendChild(canvasdiv);
+  viewport.appendChild(canvasdiv);
 
   markAsApplicationRegion(canvasdiv, { label: 'Annotation canvas' });
 
@@ -56,22 +59,22 @@ export const createDeckOverlay = (
   });
 
   const resize = () => {
-    if (containerWidth !== viewer.container.clientWidth) {
-      containerWidth = viewer.container.clientWidth;
+    if (containerWidth !== viewport.clientWidth) {
+      containerWidth = viewport.clientWidth;
       canvasdiv.setAttribute('width', String(containerWidth));
     }
 
-    if (containerHeight !== viewer.container.clientHeight) {
-      containerHeight = viewer.container.clientHeight;
+    if (containerHeight !== viewport.clientHeight) {
+      containerHeight = viewport.clientHeight;
       canvasdiv.setAttribute('height', String(containerHeight));
     }
   }
 
-  let hintState: { hints: ToolHint[], tiledImage: OpenSeadragon.TiledImage } | undefined;
+  let hintState: { hints: ToolHint[], image: RegisteredImage } | undefined;
 
   /** The active drawing tool's local hints (if any) - see `tool-hint.ts`. Unlike drafts, purely local: never read from `draftStore`. **/
-  const setHints = (hints: ToolHint[], tiledImage?: OpenSeadragon.TiledImage) => {
-    hintState = (hints.length > 0 && tiledImage) ? { hints, tiledImage } : undefined;
+  const setHints = (hints: ToolHint[], image?: RegisteredImage) => {
+    hintState = (hints.length > 0 && image) ? { hints, image } : undefined;
     scheduleRender();
   }
 
@@ -79,11 +82,11 @@ export const createDeckOverlay = (
   const gatherCandidates = (worldBounds: ReturnType<typeof getRenderViewport>['bounds']): SpatialAnnotationTarget[] => {
     const filter = opts.getFilter?.();
 
-    const committed = imageRegistry.all().flatMap(({ source, tiledImage }) => {
-      const index = imageIndexes.get(source);
+    const committed = imageRegistry.all().flatMap(image => {
+      const index = imageIndexes.get(image.source);
       if (!index) return [];
 
-      const localBounds = worldBoundsToLocal(tiledImage, worldBounds);
+      const localBounds = worldBoundsToLocal(image, worldBounds);
       const targets = filter
         ? index.getIntersecting(localBounds).filter(t => {
             const annotation = store.getAnnotation(t.annotation);
@@ -91,7 +94,7 @@ export const createDeckOverlay = (
           })
         : index.getIntersecting(localBounds);
 
-      return targets.map(target => targetToWorld(tiledImage, target));
+      return targets.map(target => targetToWorld(image, target));
     });
 
     // Drafts (this session's own in-progress shape, and - in a
@@ -100,8 +103,8 @@ export const createDeckOverlay = (
     // they're actively being interacted with, so they should never pop
     // in/out because a corner briefly left the viewport during a drag.
     const drafts = draftStore.all().flatMap(({ target }) => {
-      const tiledImage = imageRegistry.get(target.source);
-      return tiledImage ? [targetToWorld(tiledImage, target)] : [];
+      const image = imageRegistry.get(target.source);
+      return image ? [targetToWorld(image, target)] : [];
     });
 
     return [...committed, ...drafts];
@@ -111,22 +114,25 @@ export const createDeckOverlay = (
     isDraftAnnotationId(target.annotation) ? DRAFT_STYLE : opts.getStyle?.(target);
 
   const render = () => {
-    const viewport = getRenderViewport(viewer);
-    const candidates = gatherCandidates(viewport.bounds);
-    const layers = buildAnnotationLayers(candidates, viewport, { ...opts, getStyle: style });
+    const rv = getRenderViewport(map);
+    const candidates = gatherCandidates(rv.bounds);
+    const layers = buildAnnotationLayers(candidates, rv, { ...opts, getStyle: style });
 
     const hintLayers = hintState
-      ? buildHintLayers(hintState.hints.map(h => hintToWorld(hintState!.tiledImage, h)))
+      ? buildHintLayers(hintState.hints.map(h => hintToWorld(hintState!.image, h)))
       : [];
 
-    const center = viewer.viewport.getCenter(true);
+    // Center of the currently-visible world-space bounds - avoids needing a
+    // separate world-space "get view center" helper in viewport.ts.
+    const center: [number, number] = [(rv.bounds.minX + rv.bounds.maxX) / 2, (rv.bounds.minY + rv.bounds.maxY) / 2];
+
     // deck.gl zoom Z means "screenPixels = worldUnits * 2^Z" - derived directly
     // from the same `resolution` (world units per screen pixel) that drives
     // the LOD classification, so the two stay consistent with each other.
-    const zoom = -Math.log2(viewport.resolution);
+    const zoom = -Math.log2(rv.resolution);
 
     deck.setProps({
-      initialViewState: { target: [center.x, center.y, 0], zoom },
+      initialViewState: { target: [center[0], center[1], 0], zoom },
       layers: [...layers, ...hintLayers]
     });
 
@@ -134,7 +140,7 @@ export const createDeckOverlay = (
   }
 
   // Coalesce rapid-fire triggers (many store updates in one drag gesture,
-  // world add/remove, resize) into at most one render per animation frame.
+  // resize) into at most one render per animation frame.
   let scheduled = false;
   const scheduleRender = () => {
     if (scheduled) return;
@@ -145,34 +151,19 @@ export const createDeckOverlay = (
     });
   }
 
-  // update-viewport/open render synchronously, NOT through scheduleRender:
-  // OSD's own animation loop already fires update-viewport at most once per
-  // frame, so deferring it through another requestAnimationFrame would only
-  // add a full extra frame of lag between what OSD just painted and what
-  // DeckGL catches up to - exactly the stale-during-pan/zoom symptom this
-  // fixes. scheduleRender's coalescing is for triggers that aren't already
-  // frame-gated (many store updates within one drag, etc).
-  const onUpdateViewport = () => { resize(); render(); }
-  const onOpen = () => { resize(); render(); }
-  const onWorldChange = () => scheduleRender();
+  // postrender fires synchronously in step with OL's own paint - render
+  // here directly, NOT through scheduleRender, for the same anti-lag
+  // reason as OSD's update-viewport (see module doc).
+  const onPostRender = () => { resize(); render(); }
   const onWindowResize = () => { resize(); scheduleRender(); }
 
-  viewer.addHandler('update-viewport', onUpdateViewport);
-  viewer.addHandler('open', onOpen);
-  viewer.world.addHandler('add-item', onWorldChange);
-  viewer.world.addHandler('remove-item', onWorldChange);
+  map.on('postrender', onPostRender);
   window.addEventListener('resize', onWindowResize);
 
-  // Synchronous, same reasoning as onUpdateViewport: a store change during
-  // an active editor drag needs to render in the same synchronous pass as
-  // the editor's own (also-synchronous) handle repositioning, or the shape
+  // Synchronous, same reasoning as onPostRender: a store change during an
+  // active editor drag needs to render in the same synchronous pass as the
+  // editor's own (also-synchronous) handle repositioning, or the shape
   // visibly lags a frame behind the handles that are supposedly moving it.
-  // A well-behaved bulk update (bulkUpsertAnnotations etc.) is already a
-  // single store event regardless, so this doesn't add per-item overhead
-  // for the cases that matter.
-  //
-  // `Store.observe` (unlike nanostores' `.listen()`) has no return-value
-  // unsubscribe - `unobserve` needs the exact same callback reference back.
   const onStoreChange = () => render();
   store.observe(onStoreChange);
 
@@ -184,10 +175,7 @@ export const createDeckOverlay = (
   const unsubscribeDrafts = draftStore.subscribe(() => scheduleRender());
 
   const destroy = () => {
-    viewer.removeHandler('update-viewport', onUpdateViewport);
-    viewer.removeHandler('open', onOpen);
-    viewer.world.removeHandler('add-item', onWorldChange);
-    viewer.world.removeHandler('remove-item', onWorldChange);
+    map.un('postrender', onPostRender);
     window.removeEventListener('resize', onWindowResize);
     store.unobserve(onStoreChange);
     unsubscribeDrafts();

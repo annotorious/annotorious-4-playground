@@ -1,5 +1,5 @@
 import type { DrawingStyle } from '@annotorious/core';
-import type { RenderStyle } from '@annotorious/core-spatial';
+import type { RenderStyle } from './layers';
 
 const HEX_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const RGB_RE = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i;

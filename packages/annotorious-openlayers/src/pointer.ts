@@ -1,9 +1,10 @@
-import type OpenSeadragon from 'openseadragon';
+import type Map from 'ol/Map.js';
 import { draftAnnotationId, getTool, LOCAL_AUTHOR_ID } from '@annotorious/core-spatial';
 import type { DraftStore, DrawingTool, ImageIndexes, SpatialAnnotation, SpatialAnnotationTarget, SpatialShape, ToolContext, ToolHint } from '@annotorious/core-spatial';
 import type { AnnotatorState, Filter } from '@annotorious/core';
 import { createImageTransforms, screenPixelsToLocalUnits } from './coordinates';
 import { eventToWorld, getRenderViewport } from './viewport';
+import { resumeNavigation, suspendNavigation } from './navigation';
 import type { ImageRegistry } from './image-registry';
 
 const HIT_BUFFER_PX = 4;
@@ -31,7 +32,7 @@ export interface PointerHandlingOptions {
 // none of the logic here ever touches E, it only works with the internal
 // SpatialAnnotation representation (store, selection, hover).
 export const createPointerHandling = <E>(
-  viewer: OpenSeadragon.Viewer,
+  map: Map,
   state: AnnotatorState<SpatialAnnotation, E>,
   imageRegistry: ImageRegistry,
   imageIndexes: ImageIndexes,
@@ -44,18 +45,19 @@ export const createPointerHandling = <E>(
   let currentToolName: string | undefined;
   let activeTool: DrawingTool | undefined;
 
-  const hitTestAt = (worldPoint: OpenSeadragon.Point): SpatialAnnotationTarget | undefined => {
+  const hitTestAt = (worldPoint: [number, number]): SpatialAnnotationTarget | undefined => {
     const registered = imageRegistry.getImageAt(worldPoint);
     if (!registered) return undefined;
 
     const index = imageIndexes.get(registered.source);
     if (!index) return undefined;
 
-    const local = registered.tiledImage.viewportToImageCoordinates(worldPoint, true);
-    const resolution = getRenderViewport(viewer).resolution;
-    const buffer = screenPixelsToLocalUnits(resolution, registered.tiledImage, HIT_BUFFER_PX);
+    // world == local for single-image MVP (see coordinates.ts module doc).
+    const [localX, localY] = worldPoint;
+    const resolution = getRenderViewport(map).resolution;
+    const buffer = screenPixelsToLocalUnits(resolution, registered, HIT_BUFFER_PX);
 
-    const hits = index.getAt(local.x, local.y, buffer);
+    const hits = index.getAt(localX, localY, buffer);
     const filter = opts.getFilter?.();
     if (!filter) return hits[0];
 
@@ -68,7 +70,7 @@ export const createPointerHandling = <E>(
   const endDrawingSession = () => {
     activeTool?.destroy();
     activeTool = undefined;
-    viewer.setMouseNavEnabled(true);
+    resumeNavigation();
     draftStore.set(LOCAL_AUTHOR_ID, undefined);
     opts.onHint?.([], undefined);
   }
@@ -82,17 +84,17 @@ export const createPointerHandling = <E>(
       return;
     }
 
-    const world = eventToWorld(viewer, event);
+    const world = eventToWorld(map, event);
     const registered = imageRegistry.getImageAt(world);
     if (!registered) return; // pointer isn't over any image - nothing to draw on
 
-    const { source, tiledImage } = registered;
+    const { source } = registered;
     // Tools never render their own screen-space overlay (they report shapes
     // via onChange/onComplete and the host renders the preview through
     // DeckGL, in world space) - only toLocalCoordinates is needed here.
-    const { toLocalCoordinates } = createImageTransforms(viewer, tiledImage);
+    const { toLocalCoordinates } = createImageTransforms(map, registered);
 
-    viewer.setMouseNavEnabled(false);
+    suspendNavigation(map);
 
     const ctx: ToolContext<SpatialShape> = {
       toLocalCoordinates,
@@ -122,7 +124,7 @@ export const createPointerHandling = <E>(
 
     if (drawingEnabled) return;
 
-    const hit = hitTestAt(eventToWorld(viewer, event));
+    const hit = hitTestAt(eventToWorld(map, event));
     hover.set(hit ? hit.annotation : null);
   }
 
@@ -157,7 +159,7 @@ export const createPointerHandling = <E>(
     pointerDownAt = undefined;
     if (moved > CLICK_THRESHOLD_PX) return; // a pan/drag, not a click
 
-    const hit = hitTestAt(eventToWorld(viewer, event));
+    const hit = hitTestAt(eventToWorld(map, event));
     const hasModifier = event.shiftKey || event.metaKey || event.ctrlKey;
 
     if (hit) {
@@ -175,10 +177,11 @@ export const createPointerHandling = <E>(
     activeTool?.onKeyDown?.(event);
   }
 
-  viewer.element.addEventListener('pointermove', onPointerMove);
-  viewer.element.addEventListener('pointerdown', onPointerDown);
-  viewer.element.addEventListener('pointerup', onPointerUp);
-  viewer.element.addEventListener('keydown', onKeyDown);
+  const viewport = map.getViewport();
+  viewport.addEventListener('pointermove', onPointerMove);
+  viewport.addEventListener('pointerdown', onPointerDown);
+  viewport.addEventListener('pointerup', onPointerUp);
+  viewport.addEventListener('keydown', onKeyDown);
 
   const setDrawingEnabled = (enabled: boolean) => {
     drawingEnabled = enabled;
@@ -200,10 +203,10 @@ export const createPointerHandling = <E>(
 
   const destroy = () => {
     if (activeTool) endDrawingSession();
-    viewer.element.removeEventListener('pointermove', onPointerMove);
-    viewer.element.removeEventListener('pointerdown', onPointerDown);
-    viewer.element.removeEventListener('pointerup', onPointerUp);
-    viewer.element.removeEventListener('keydown', onKeyDown);
+    viewport.removeEventListener('pointermove', onPointerMove);
+    viewport.removeEventListener('pointerdown', onPointerDown);
+    viewport.removeEventListener('pointerup', onPointerUp);
+    viewport.removeEventListener('keydown', onKeyDown);
   }
 
   return { cancelDrawing, destroy, getDrawingTool, isDrawingEnabled, setDrawingEnabled, setDrawingTool };

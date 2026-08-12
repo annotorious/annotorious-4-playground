@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/annotorious-core" },
     { "path": "./packages/annotorious-core-spatial" },
-    { "path": "./packages/annotorious-openseadragon" }
+    { "path": "./packages/annotorious-openseadragon" },
+    { "path": "./packages/annotorious-openlayers" }
   ]
 }

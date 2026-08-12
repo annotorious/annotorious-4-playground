@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createDraftStore } from '../src/draft-store';
+import { createDraftStore, draftAnnotationId, isDraftAnnotationId, LOCAL_AUTHOR_ID } from '../src/draft-store';
 import { createBox } from '../src/geometry';
 import type { SpatialAnnotationTarget } from '../src/model';
 
@@ -49,6 +49,27 @@ describe('draft store', () => {
 
     // Once on subscribe (nanostores calls immediately) + 3 updates
     expect(listener).toHaveBeenCalledTimes(4);
+  });
+
+});
+
+describe('draft annotation ids', () => {
+
+  it('builds a distinct id per author', () => {
+    expect(draftAnnotationId('local')).not.toBe(draftAnnotationId('remote-1'));
+  });
+
+  it('is stable for the same author', () => {
+    expect(draftAnnotationId(LOCAL_AUTHOR_ID)).toBe(draftAnnotationId(LOCAL_AUTHOR_ID));
+  });
+
+  it('recognizes ids it built as draft ids', () => {
+    expect(isDraftAnnotationId(draftAnnotationId(LOCAL_AUTHOR_ID))).toBe(true);
+    expect(isDraftAnnotationId(draftAnnotationId('remote-1'))).toBe(true);
+  });
+
+  it('does not mistake a real annotation id for a draft id', () => {
+    expect(isDraftAnnotationId('a1b2c3d4-real-annotation-id')).toBe(false);
   });
 
 });

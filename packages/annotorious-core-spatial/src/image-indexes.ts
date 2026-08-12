@@ -1,5 +1,6 @@
-import { createAnnotationIndex } from '@annotorious/core-spatial';
-import type { AnnotationIndex, SpatialAnnotation, SpatialAnnotationTarget } from '@annotorious/core-spatial';
+import { createAnnotationIndex } from './annotation-index';
+import type { AnnotationIndex } from './annotation-index';
+import type { SpatialAnnotation, SpatialAnnotationTarget } from './model';
 import type { Store } from '@annotorious/core';
 
 /**
@@ -10,7 +11,11 @@ import type { Store } from '@annotorious/core';
  * be far too expensive at scale; this way, a single-target edit is a single
  * O(log n) index update, and geometry only gets transformed to world space
  * for the (much smaller) set of candidates that survive a viewport query -
- * see `gatherCandidates` in `render-loop.ts`.
+ * see `gatherCandidates` in a viewer package's deck-overlay.
+ *
+ * Viewer-agnostic - lives here (not in a viewer package) since it depends
+ * only on `Store`/`AnnotationIndex`, and both OpenSeadragon and OpenLayers
+ * need the exact same per-source indexing.
  */
 export const createImageIndexes = (store: Store<SpatialAnnotation>) => {
 

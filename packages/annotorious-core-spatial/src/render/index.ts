@@ -1,3 +1,4 @@
+export * from './color';
 export * from './display-container';
 export * from './hint-layers';
 export * from './layers';

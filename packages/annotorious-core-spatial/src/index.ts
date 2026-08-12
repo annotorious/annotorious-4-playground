@@ -1,6 +1,7 @@
 export * from './annotation-index';
 export * from './draft-store';
 export * from './geometry';
+export * from './image-indexes';
 export * from './model';
 export * from './render';
 export * from './spatial-index';

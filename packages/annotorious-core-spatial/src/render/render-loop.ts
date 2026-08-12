@@ -1,5 +1,5 @@
 import { Deck, OrthographicView } from '@deck.gl/core';
-import type { Filter, Store, ViewportState } from '@annotorious/core';
+import type { Filter, Store, StoreChangeEvent, ViewportState } from '@annotorious/core';
 import type { Bounds } from '../geometry';
 import type { DraftStore } from '../draft-store';
 import type { ImageIndexes } from '../image-indexes';
@@ -165,17 +165,35 @@ export const createDeckRenderLoop = <Img>(
   // The full candidate set - every committed annotation across every
   // registered image, plus in-progress drafts, already transformed to world
   // space - NOT filtered to whatever's currently visible (see module doc).
-  // Kept as two separate caches so a draft update (frequent, during a drag)
-  // doesn't need to re-scan the (potentially much larger) committed set,
-  // and vice versa.
-  let committedCache: SpatialAnnotationTarget[] = [];
+  // `committedCache` is keyed by annotation id (not a plain array) so a
+  // single-annotation store change (a drag/resize gesture) can patch just
+  // that one entry - `patchCommitted`/`removeCommitted` below - instead of
+  // rescanning every registered image's index on every mousemove of the
+  // gesture, which would cost O(total annotations) instead of O(1) at
+  // exactly the moment it matters most (an active drag).
+  let committedCache = new Map<string, SpatialAnnotationTarget>();
   let draftsCache: SpatialAnnotationTarget[] = [];
 
   const rebuildCommitted = () => {
-    committedCache = adapter.images().flatMap(({ source, image }) => {
+    committedCache = new Map();
+    adapter.images().forEach(({ source, image }) => {
       const index = imageIndexes.get(source);
-      return index ? index.all().map(target => adapter.targetToWorld(image, target)) : [];
+      index?.all().forEach(target => committedCache.set(target.annotation, adapter.targetToWorld(image, target)));
     });
+  }
+
+  const patchCommitted = (annotation: SpatialAnnotation) => {
+    const image = adapter.getImage(annotation.target.source);
+    if (image === undefined) {
+      committedCache.delete(annotation.id);
+      return;
+    }
+
+    committedCache.set(annotation.id, adapter.targetToWorld(image, annotation.target));
+  }
+
+  const removeCommitted = (id: string) => {
+    committedCache.delete(id);
   }
 
   const rebuildDrafts = () => {
@@ -197,14 +215,16 @@ export const createDeckRenderLoop = <Img>(
    * viewport handler - see `paintCamera` for that.
    */
   const rebuildLayers = () => {
+    const __t0 = performance.now();
     const filter = opts.getFilter?.();
 
+    const allCommitted = [...committedCache.values()];
     const committed = filter
-      ? committedCache.filter(t => {
+      ? allCommitted.filter(t => {
           const annotation = store.getAnnotation(t.annotation);
           return annotation && filter(annotation);
         })
-      : committedCache;
+      : allCommitted;
 
     const candidates = [...committed, ...draftsCache];
 
@@ -217,10 +237,14 @@ export const createDeckRenderLoop = <Img>(
 
     deck.setProps({ layers: [...layers, ...hintLayers] });
     deck.redraw();
+    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0 };
+    (window as any).__renderLoopDebug.rebuildLayers++;
+    (window as any).__renderLoopDebug.rebuildLayersMs += performance.now() - __t0;
   }
 
   /** Cheap camera-only update for pan/zoom - touches no annotation data, no spatial index, at all. **/
   const paintCamera = () => {
+    const __t0 = performance.now();
     const { bounds, resolution } = adapter.getRenderViewport();
 
     const center: [number, number] = [(bounds.minX + bounds.maxX) / 2, (bounds.minY + bounds.maxY) / 2];
@@ -231,6 +255,9 @@ export const createDeckRenderLoop = <Img>(
 
     deck.setProps({ initialViewState: { target: [center[0], center[1], 0], zoom } });
     deck.redraw();
+    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0 };
+    (window as any).__renderLoopDebug.paintCamera++;
+    (window as any).__renderLoopDebug.paintCameraMs += performance.now() - __t0;
   }
 
   /** Recomputes which committed annotations currently intersect the viewport - the one thing that still needs an index query, kept off the per-frame path (see `scheduleSettledRefresh`). **/
@@ -297,6 +324,8 @@ export const createDeckRenderLoop = <Img>(
 
   /** Call on every pan/zoom frame - the only thing on the per-frame path. **/
   const notifyViewportChanged = () => {
+    (window as any).__renderLoopDebug ??= { paintCamera: 0, rebuildLayers: 0, paintCameraMs: 0, rebuildLayersMs: 0, notify: 0 };
+    (window as any).__renderLoopDebug.notify = ((window as any).__renderLoopDebug.notify || 0) + 1;
     resize();
     paintCamera();
     scheduleSettledRefresh();

@@ -67,6 +67,17 @@
           <button id="redo">Redo</button>
           <button id="add-second-image">Add 2nd image</button>
         </div>
+        <div class="row">
+          <span>Drawing mode:</span>
+          <button id="mode-drag">Drag</button>
+          <button id="mode-click">Click</button>
+        </div>
+        <div class="row">
+          <span>Perf test:</span>
+          <input id="perf-count" type="number" value="1000" min="0" step="100" style="width: 70px;" />
+          <button id="perf-generate">Generate</button>
+          <span id="perf-fps"></span>
+        </div>
         <div id="log"></div>
       </div>
     </div>

@@ -5,6 +5,7 @@ import IIIF from 'ol/source/IIIF.js';
 import IIIFInfo from 'ol/format/IIIFInfo.js';
 import { defaults as defaultInteractions } from 'ol/interaction/defaults.js';
 import { registerDefaultEditors, registerDefaultTools } from '@annotorious/core-spatial';
+import type { DrawingMode } from '@annotorious/core-spatial';
 import { createOLAnnotator } from '../src/annotator';
 
 registerDefaultTools();
@@ -83,6 +84,20 @@ fetch(IMAGE_INFO_URL)
 
     document.getElementById('undo')!.addEventListener('click', () => anno.undo());
     document.getElementById('redo')!.addEventListener('click', () => anno.redo());
+
+    const modeButtons: Record<DrawingMode, HTMLButtonElement> = {
+      drag: document.getElementById('mode-drag') as HTMLButtonElement,
+      click: document.getElementById('mode-click') as HTMLButtonElement
+    };
+
+    const setDrawingMode = (mode: DrawingMode) => {
+      Object.entries(modeButtons).forEach(([key, btn]) => btn.classList.toggle('active', key === mode));
+      anno.setDrawingMode(mode);
+    }
+
+    modeButtons.drag!.addEventListener('click', () => setDrawingMode('drag'));
+    modeButtons.click!.addEventListener('click', () => setDrawingMode('click'));
+    setDrawingMode('drag');
 
     // Keyboard: Delete/Backspace removes the selected annotation(s), matching
     // what most annotation tools support as a baseline expectation.

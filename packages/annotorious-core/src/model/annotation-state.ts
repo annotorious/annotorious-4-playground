@@ -4,10 +4,4 @@ export interface AnnotationState {
 
   hovered?: boolean;
 
-  custom?: {
-
-    [key: string]: any
-
-  }
-
 }

@@ -10,10 +10,10 @@ const makeAnnotation = (id: string): Partial<Annotation> => ({
 
 const tick = (ms = 20) => new Promise(resolve => setTimeout(resolve, ms));
 
-const setup = (autoSave = false) => {
+const setup = () => {
   const state = createAnnotatorState<Annotation, Annotation>();
   const undoStack = createUndoStack(state.store);
-  const lifecycle = createLifecycleObserver(state, undoStack, undefined, autoSave);
+  const lifecycle = createLifecycleObserver(state, undoStack, undefined);
   return { state, undoStack, lifecycle };
 }
 
@@ -77,6 +77,40 @@ describe('lifecycle', () => {
     const [current, previous] = onUpdate.mock.calls[0];
     expect((previous.target.selector as any).x).toBe(0);
     expect((current.target.selector as any).x).toBe(3);
+  });
+
+  it('reports target-only changes after a debounce, even if never deselected', async () => {
+    // https://github.com/annotorious/annotorious/issues/566 - a host must
+    // eventually hear about a completed drag/resize without requiring the
+    // user to deselect, or a plugin/host that keeps a shape selected for a
+    // while (or forever) would never be told about the edit.
+    vi.useFakeTimers();
+
+    const { state, lifecycle } = setup();
+    state.store.addAnnotation(makeAnnotation('a1'));
+
+    const onUpdate = vi.fn();
+    lifecycle.on('updateAnnotation', onUpdate);
+
+    state.selection.userSelect('a1');
+    state.store.updateTarget({ annotation: 'a1', selector: { x: 1 } });
+    state.store.updateTarget({ annotation: 'a1', selector: { x: 2 } });
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(onUpdate).not.toHaveBeenCalled(); // still within the debounce window
+
+    await vi.advanceTimersByTimeAsync(600); // past 1000ms of inactivity since the last update
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    const [current, previous] = onUpdate.mock.calls[0];
+    expect((previous.target.selector as any).x).toBe(0);
+    expect((current.target.selector as any).x).toBe(2);
+
+    // Still selected - the annotation-still-selected debounce path doesn't
+    // interfere with normal deselect-triggered flushing for later edits.
+    expect(state.selection.isSelected('a1')).toBe(true);
+
+    vi.useRealTimers();
   });
 
   it('does not report anything on deselect if nothing changed', async () => {

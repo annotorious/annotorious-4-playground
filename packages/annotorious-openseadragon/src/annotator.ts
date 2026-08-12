@@ -17,13 +17,12 @@ import type { DrawingMode, LODOptions, SnappingProvider, SpatialAnnotation, Spat
 import { createDeckOverlay } from './deck-overlay';
 import { createEditorOverlay } from './editor-overlay';
 import { createImageRegistry } from './image-registry';
+import type { ImageRegistry } from './image-registry';
 import { createPointerHandling } from './pointer';
 
 export interface OpenSeadragonAnnotatorOpts<E = SpatialAnnotation> {
 
   adapter?: FormatAdapter<SpatialAnnotation, E>;
-
-  autoSave?: boolean;
 
   /** @default 'drag' **/
   drawingMode?: DrawingMode;
@@ -56,6 +55,18 @@ export interface OpenSeadragonAnnotator<E = SpatialAnnotation> extends SpatialAn
 
   getDrawingTool(): string | undefined;
 
+  /**
+   * Resolves which registered image a target belongs to (and its current
+   * viewer placement) - `imageRegistry.get(target.source)` paired with
+   * `getEditorTransform(viewer, image)` (from `./coordinates`) is what a
+   * plugin needs to position its own per-annotation overlay (a label, a
+   * tooltip, ...) the same way the built-in editor handles position
+   * themselves. Exposed specifically for that - see the arrows-plugin-style
+   * "mount a Solid layer on the viewer" pattern discussed for a labels
+   * plugin.
+   */
+  imageRegistry: ImageRegistry;
+
   isDrawingEnabled(): boolean;
 
   listDrawingTools(): string[];
@@ -83,7 +94,7 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
   const { hover, selection, store } = state;
 
   const undoStack = createUndoStack(store);
-  const lifecycle = createLifecycleObserver<SpatialAnnotation, E>(state, undoStack, opts.adapter, opts.autoSave);
+  const lifecycle = createLifecycleObserver<SpatialAnnotation, E>(state, undoStack, opts.adapter);
 
   const imageRegistry = createImageRegistry(viewer);
   const imageIndexes = createImageIndexes(store);
@@ -187,6 +198,7 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
     destroy,
     draftStore,
     getDrawingTool: pointerHandling.getDrawingTool,
+    imageRegistry,
     isDrawingEnabled: pointerHandling.isDrawingEnabled,
     listDrawingTools: listTools,
     on: lifecycle.on,

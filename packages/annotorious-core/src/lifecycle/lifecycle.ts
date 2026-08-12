@@ -6,9 +6,9 @@ import type { LifecycleEvents } from './lifecycle-events';
 
 export type Lifecycle<I extends Annotation, E extends unknown> = ReturnType<typeof createLifecycleObserver<I, E>>;
 
-// How long to wait for inactivity before flushing pending target changes,
-// when `autoSave` is on.
-const AUTOSAVE_IDLE_MS = 1000;
+// How long to wait for inactivity before flushing pending target changes.
+// Unconditional - see module doc below for why this can't be opt-in.
+const UPDATE_DEBOUNCE_MS = 1000;
 
 /**
  * Bridges the low-level store/selection/hover/viewport state onto the public,
@@ -21,14 +21,22 @@ const AUTOSAVE_IDLE_MS = 1000;
  * small store updates during a single gesture - reporting each one would be
  * event spam. Those are batched: the annotation's state right before the
  * gesture started is remembered in `pending`, and compared against its
- * current state once the gesture is clearly over (the annotation is
- * deselected, or - with `autoSave` - the user has been idle for a while).
+ * current state once the gesture is clearly over - either the annotation is
+ * deselected, *or* (unconditionally, not behind an opt-in flag) the user has
+ * paused for `UPDATE_DEBOUNCE_MS`. That second path used to be gated behind
+ * an `autoSave` option (ported from v3, which had the exact same gate) -
+ * removed, because gating it meant a host that never turns `autoSave` on
+ * (the default) never hears about a completed drag/resize until the user
+ * happens to deselect, which could be never. That's precisely the "always
+ * fire, independently of selection, and simply debounce fast changes"
+ * behavior https://github.com/annotorious/annotorious/issues/566 asked for -
+ * deselect is still an equally-valid, *faster* way to flush early, it's just
+ * no longer the only way.
  */
 export const createLifecycleObserver = <I extends Annotation, E extends unknown>(
   state: AnnotatorState<I, E>,
   undoStack: UndoStack<I>,
-  adapter?: FormatAdapter<I, E>,
-  autoSave?: boolean
+  adapter?: FormatAdapter<I, E>
 ) => {
   const { hover, selection, store, viewport } = state;
 
@@ -114,10 +122,8 @@ export const createLifecycleObserver = <I extends Annotation, E extends unknown>
     emit('viewportIntersect', ids.map(id => store.getAnnotation(id)).filter((a): a is I => Boolean(a))));
 
   store.observe(({ changes }) => {
-    if (autoSave) {
-      clearTimeout(idleTimeout);
-      idleTimeout = setTimeout(flushAll, AUTOSAVE_IDLE_MS);
-    }
+    clearTimeout(idleTimeout);
+    idleTimeout = setTimeout(flushAll, UPDATE_DEBOUNCE_MS);
 
     (changes.created || []).forEach(a => emit('createAnnotation', a));
 

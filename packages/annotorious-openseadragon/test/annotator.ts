@@ -1,5 +1,6 @@
 import OpenSeadragon from 'openseadragon';
-import { registerDefaultEditors, registerDefaultTools } from '@annotorious/core-spatial';
+import { createBox, registerDefaultEditors, registerDefaultTools } from '@annotorious/core-spatial';
+import type { DrawingMode, SpatialAnnotation } from '@annotorious/core-spatial';
 import { createOSDAnnotator } from '../src/annotator';
 
 registerDefaultTools();
@@ -88,6 +89,71 @@ document.getElementById('add-second-image')!.addEventListener('click', async () 
     line(`failed to add second image: ${err}`);
   }
 });
+
+const modeButtons: Record<DrawingMode, HTMLButtonElement> = {
+  drag: document.getElementById('mode-drag') as HTMLButtonElement,
+  click: document.getElementById('mode-click') as HTMLButtonElement
+};
+
+const setDrawingMode = (mode: DrawingMode) => {
+  Object.entries(modeButtons).forEach(([key, btn]) => btn.classList.toggle('active', key === mode));
+  anno.setDrawingMode(mode);
+}
+
+modeButtons.drag!.addEventListener('click', () => setDrawingMode('drag'));
+modeButtons.click!.addEventListener('click', () => setDrawingMode('click'));
+setDrawingMode('drag');
+
+// Performance test: generates N random boxes scattered across the open
+// image and loads them via the real Annotator/Store API (setAnnotations),
+// rather than pushing shapes into deck.gl directly (see the older,
+// pre-annotator-API test/index.ts benchmark this replaces). An FPS counter
+// runs continuously so panning/zooming performance is visible right after
+// generating a large batch.
+const perfCountInput = document.getElementById('perf-count') as HTMLInputElement;
+const perfGenerateButton = document.getElementById('perf-generate') as HTMLButtonElement;
+const perfFpsLabel = document.getElementById('perf-fps') as HTMLSpanElement;
+
+const generateAnnotations = (n: number): SpatialAnnotation[] => {
+  const { x: width, y: height } = viewer.world.getItemAt(0).getContentSize();
+
+  return Array.from({ length: n }, () => {
+    const w = 20 + Math.random() * (width / 10);
+    const h = 20 + Math.random() * (height / 10);
+    const x = Math.random() * (width - w);
+    const y = Math.random() * (height - h);
+
+    const id = crypto.randomUUID();
+    return { id, bodies: [], target: { annotation: id, selector: createBox(x, y, w, h) } };
+  });
+}
+
+perfGenerateButton.addEventListener('click', () => {
+  const n = Number(perfCountInput.value) || 0;
+  const annotations = generateAnnotations(n);
+
+  const started = performance.now();
+  anno.setAnnotations(annotations);
+  line(`generated ${n} annotations (${(performance.now() - started).toFixed(1)}ms)`);
+});
+
+let perfFrames = 0;
+let perfLastReport = performance.now();
+
+const perfTick = () => {
+  perfFrames++;
+
+  const now = performance.now();
+  if (now - perfLastReport > 1000) {
+    perfFpsLabel.textContent = `${perfFrames} fps`;
+    perfFrames = 0;
+    perfLastReport = now;
+  }
+
+  requestAnimationFrame(perfTick);
+};
+
+requestAnimationFrame(perfTick);
 
 // Keyboard: Delete/Backspace removes the selected annotation(s), matching
 // what most annotation tools support as a baseline expectation.

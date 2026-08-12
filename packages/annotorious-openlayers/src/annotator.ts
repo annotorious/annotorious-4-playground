@@ -13,7 +13,7 @@ import type {
   UserSelectActionExpression
 } from '@annotorious/core';
 import { createDraftStore, createImageIndexes, listTools, toRenderStyle } from '@annotorious/core-spatial';
-import type { LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget, SpatialAnnotator } from '@annotorious/core-spatial';
+import type { DrawingMode, LODOptions, SnappingProvider, SpatialAnnotation, SpatialAnnotationTarget, SpatialAnnotator } from '@annotorious/core-spatial';
 import { createDeckOverlay } from './deck-overlay';
 import { createEditorOverlay } from './editor-overlay';
 import { createImageRegistry } from './image-registry';
@@ -24,6 +24,9 @@ export interface OpenLayersAnnotatorOpts<E = SpatialAnnotation> {
   adapter?: FormatAdapter<SpatialAnnotation, E>;
 
   autoSave?: boolean;
+
+  /** @default 'drag' **/
+  drawingMode?: DrawingMode;
 
   initialUser?: User;
 
@@ -63,7 +66,11 @@ export interface OpenLayersAnnotator<E = SpatialAnnotation> extends SpatialAnnot
 
   setDrawingEnabled(enabled: boolean): void;
 
+  setDrawingMode(mode: DrawingMode): void;
+
   setDrawingTool(name: string): void;
+
+  setVisible(visible: boolean): void;
 
 }
 
@@ -77,7 +84,7 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
     ...(opts.userSelectAction ? { userSelectAction: opts.userSelectAction } : {})
   });
 
-  const { store } = state;
+  const { hover, selection, store } = state;
 
   const undoStack = createUndoStack(store);
   const lifecycle = createLifecycleObserver<SpatialAnnotation, E>(state, undoStack, opts.adapter, opts.autoSave);
@@ -104,22 +111,35 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
     const annotation = store.getAnnotation(target.annotation);
     if (!annotation) return undefined;
 
-    const computed = typeof currentStyle === 'function' ? currentStyle(annotation, undefined) : currentStyle;
+    const computed = typeof currentStyle === 'function'
+      ? currentStyle(annotation, { selected: selection.isSelected(annotation.id), hovered: hover.current === annotation.id })
+      : currentStyle;
+
     return computed ? toRenderStyle(computed) : undefined;
   }
 
   const getFilter = () => currentFilter;
 
-  const deckOverlay = createDeckOverlay(map, store, imageRegistry, imageIndexes, draftStore, {
+  const deckOverlay = createDeckOverlay(map, store, imageRegistry, imageIndexes, draftStore, state.viewport, {
     getStyle,
     getFilter,
     ...(opts.lod ? { lod: opts.lod } : {})
   });
 
+  // Selection/hover are their own state slices, separate from the store -
+  // a style callback that reads `state.selected`/`state.hovered` (see
+  // getStyle above) needs a fresh render whenever either changes, or the
+  // shape keeps showing whatever style was last computed before the change
+  // (e.g. still unselected-colored right after being selected).
+  const unsubscribeSelection = selection.subscribe(() => deckOverlay.render());
+  const unsubscribeHover = hover.subscribe(() => deckOverlay.render());
+
   const pointerHandling = createPointerHandling(map, state, imageRegistry, imageIndexes, draftStore, {
     ...(opts.multiSelect !== undefined ? { multiSelect: opts.multiSelect } : {}),
+    ...(opts.drawingMode ? { drawingMode: opts.drawingMode } : {}),
     getFilter,
-    onHint: (hints, source) => deckOverlay.setHints(hints, imageRegistry.get(source))
+    onHint: (hints, source) => deckOverlay.setHints(hints, imageRegistry.get(source)),
+    onClickAnnotation: (annotation, event) => lifecycle.emit('clickAnnotation', annotation, event)
   });
 
   const editorOverlay = createEditorOverlay(map, state, imageRegistry, {
@@ -139,6 +159,8 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
   }
 
   const destroy = () => {
+    unsubscribeSelection();
+    unsubscribeHover();
     editorOverlay.destroy();
     pointerHandling.destroy();
     deckOverlay.destroy();
@@ -158,9 +180,11 @@ export const createOLAnnotator = <E = SpatialAnnotation>(
     on: lifecycle.on,
     off: lifecycle.off,
     setDrawingEnabled: pointerHandling.setDrawingEnabled,
+    setDrawingMode: pointerHandling.setDrawingMode,
     setDrawingTool: pointerHandling.setDrawingTool,
     setFilter,
     setStyle,
+    setVisible: deckOverlay.setVisible,
     state
   };
 

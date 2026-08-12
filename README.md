@@ -1,2 +1,152 @@
-# annotorious-4-playground
-A prototyping ground for Annotorious v4
+# Annotorious v4 Playground
+
+Work in progress on a rewrite of Annotorious.
+
+## Progress
+
+- [ ] `packages/annotorious-core/`
+  - [ ] `src/`
+    - [ ] `index.ts`
+    - [ ] `lifecycle/`
+      - [ ] `index.ts`
+      - [ ] `lifecycle-events.ts`
+      - [ ] `lifecycle.ts`
+    - [ ] `model/`
+      - [ ] `annotation-state.ts`
+      - [ ] `annotation.ts`
+      - [ ] `annotator.ts`
+      - [ ] `drawing-style.ts`
+      - [ ] `filter.ts`
+      - [ ] `format-adapter.ts`
+      - [ ] `index.ts`
+      - [ ] `user.ts`
+      - [ ] `w3c-annotation.ts`
+    - [ ] `state/`
+      - [ ] `hover.ts`
+      - [ ] `index.ts`
+      - [ ] `selection.ts`
+      - [ ] `store-observer.ts`
+      - [ ] `store.ts`
+      - [ ] `undo-stack.ts`
+      - [ ] `viewport.ts`
+    - [ ] `utils/`
+      - [ ] `annotation-utils.ts`
+      - [ ] `diff-annotations.ts`
+      - [ ] `index.ts`
+  - [ ] `test/`
+    - [ ] `lifecycle.test.ts`
+    - [ ] `store.test.ts`
+    - [ ] `undo-stack.test.ts`
+
+- [ ] `packages/annotorious-core-spatial/`
+  - [ ] `src/`
+    - [ ] `annotation-index.ts`
+    - [ ] `draft-store.ts`
+    - [ ] `geometry/`
+      - [ ] `bounds.ts`
+      - [ ] `factories.ts`
+      - [ ] `hit-test.ts`
+      - [ ] `index.ts`
+      - [ ] `types.ts`
+    - [ ] `image-indexes.ts`
+    - [ ] `index.ts`
+    - [ ] `model/`
+      - [ ] `index.ts`
+      - [ ] `spatial-annotation.ts`
+    - [ ] `render/`
+      - [ ] `color.ts`
+      - [ ] `display-container.ts`
+      - [ ] `hint-layers.ts`
+      - [ ] `index.ts`
+      - [ ] `layers.ts`
+      - [ ] `lod.ts`
+    - [ ] `spatial-annotator.ts`
+    - [ ] `spatial-index.ts`
+    - [ ] `tools/`
+      - [ ] `box-editor.tsx`
+      - [ ] `box-geometry-ops.ts`
+      - [ ] `box-tool.ts`
+      - [ ] `built-ins.ts`
+      - [ ] `drawing-tool.ts`
+      - [ ] `index.ts`
+      - [ ] `point-editor.tsx`
+      - [ ] `point-tool.ts`
+      - [ ] `polygon-editor.tsx`
+      - [ ] `polygon-geometry-ops.ts`
+      - [ ] `polygon-tool.ts`
+      - [ ] `shape-editor.ts`
+      - [ ] `snapping.ts`
+      - [ ] `tool-hint.ts`
+    - [ ] `w3c/`
+      - [ ] `format-adapter.ts`
+      - [ ] `fragment-selector.ts`
+      - [ ] `index.ts`
+      - [ ] `point-selector.ts`
+      - [ ] `svg-selector.ts`
+  - [ ] `test/`
+    - [ ] `annotation-index.test.ts`
+    - [ ] `box-editor.test.ts`
+    - [ ] `box-geometry-ops.test.ts`
+    - [ ] `color.test.ts`
+    - [ ] `draft-store.test.ts`
+    - [ ] `geometry.test.ts`
+    - [ ] `image-indexes.test.ts`
+    - [ ] `layers.test.ts`
+    - [ ] `lod.test.ts`
+    - [ ] `point-editor.test.ts`
+    - [ ] `polygon-editor.test.ts`
+    - [ ] `polygon-geometry-ops.test.ts`
+    - [ ] `snapping.test.ts`
+    - [ ] `spatial-index.test.ts`
+    - [ ] `tools.test.ts`
+    - [ ] `w3c.test.ts`
+
+- [ ] `packages/annotorious-openlayers/`
+  - [ ] `src/`
+    - [ ] `annotator.ts`
+    - [ ] `coordinates.ts`
+    - [ ] `deck-overlay.ts`
+    - [ ] `editor-overlay.ts`
+    - [ ] `image-registry.ts`
+    - [ ] `index.ts`
+    - [ ] `navigation.ts`
+    - [ ] `pointer.ts`
+    - [ ] `projection.ts`
+    - [ ] `viewport.ts`
+  - [ ] `test/`
+    - [ ] `annotator.html`
+    - [ ] `annotator.ts`
+    - [ ] `coordinates.test.ts`
+    - [ ] `image-registry.test.ts`
+    - [ ] `navigation.test.ts`
+    - [ ] `projection.test.ts`
+    - [ ] `setup.ts`
+    - [ ] `viewport.test.ts`
+
+- [ ] `packages/annotorious-openseadragon/`
+  - [ ] `src/`
+    - [ ] `annotator.ts`
+    - [ ] `coordinates.ts`
+    - [ ] `deck-gl-overlay.ts`
+    - [ ] `deck-overlay.ts`
+    - [ ] `editor-overlay.ts`
+    - [ ] `image-registry.ts`
+    - [ ] `index.ts`
+    - [ ] `pointer.ts`
+    - [ ] `viewport.ts`
+  - [ ] `test/`
+    - [ ] `annotator.html`
+    - [ ] `annotator.ts`
+    - [ ] `index.html`
+    - [ ] `index.ts`
+
+- [ ] `packages/annotorious-plugin-broadcast-sync/`
+  - [ ] `src/`
+    - [ ] `index.ts`
+    - [ ] `protocol.ts`
+    - [ ] `sync.ts`
+    - [ ] `transport.ts`
+  - [ ] `test/`
+    - [ ] `annotator.html`
+    - [ ] `annotator.ts`
+    - [ ] `sync.test.ts`

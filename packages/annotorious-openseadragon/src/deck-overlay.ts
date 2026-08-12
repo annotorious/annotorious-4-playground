@@ -2,7 +2,7 @@ import type OpenSeadragon from 'openseadragon';
 import { Deck, OrthographicView } from '@deck.gl/core';
 import { buildAnnotationLayers, buildHintLayers, isDraftAnnotationId, markAsApplicationRegion } from '@annotorious/core-spatial';
 import type { DraftStore, ImageIndexes, LODOptions, RenderStyle, SpatialAnnotation, SpatialAnnotationTarget, ToolHint } from '@annotorious/core-spatial';
-import type { Filter, Store } from '@annotorious/core';
+import type { Filter, Store, ViewportState } from '@annotorious/core';
 import { hintToWorld, targetToWorld, worldBoundsToLocal } from './coordinates';
 import { getRenderViewport } from './viewport';
 import type { ImageRegistry } from './image-registry';
@@ -34,6 +34,7 @@ export const createDeckOverlay = (
   imageRegistry: ImageRegistry,
   imageIndexes: ImageIndexes,
   draftStore: DraftStore<SpatialAnnotationTarget>,
+  viewport: ViewportState,
   opts: DeckOverlayOptions = {}
 ) => {
   let containerWidth = 0;
@@ -67,6 +68,22 @@ export const createDeckOverlay = (
     }
   }
 
+  // A plain CSS toggle on the canvas - cheap, instant, and needs no changes
+  // to render()/gatherCandidates(): the browser skips painting/compositing
+  // a display:none element entirely, so this hides every annotation, draft,
+  // and hint in one shot without touching what gets built for them.
+  const setVisible = (visible: boolean) => {
+    canvasdiv.style.display = visible ? '' : 'none';
+  }
+
+  // Dedup key for the last id set pushed to `viewport` (see gatherCandidates)
+  // - avoids re-notifying `viewportIntersect` listeners on every render when
+  // the actually-visible set hasn't changed (e.g. panning within a region
+  // where the same annotations stay in view). Sorted/joined rather than
+  // compared by array reference, since `committed`'s own order isn't
+  // guaranteed stable between renders even when its contents are.
+  let lastViewportKey = '';
+
   let hintState: { hints: ToolHint[], tiledImage: OpenSeadragon.TiledImage } | undefined;
 
   /** The active drawing tool's local hints (if any) - see `tool-hint.ts`. Unlike drafts, purely local: never read from `draftStore`. **/
@@ -93,6 +110,15 @@ export const createDeckOverlay = (
 
       return targets.map(target => targetToWorld(tiledImage, target));
     });
+
+    // Feeds the `viewportIntersect` lifecycle event - committed annotations
+    // only (a draft isn't a real annotation the store knows about).
+    const ids = committed.map(t => t.annotation);
+    const key = ids.slice().sort().join(',');
+    if (key !== lastViewportKey) {
+      lastViewportKey = key;
+      viewport.set(ids);
+    }
 
     // Drafts (this session's own in-progress shape, and - in a
     // collaborative setup - other authors' too, see draft-store.ts) are
@@ -198,6 +224,6 @@ export const createDeckOverlay = (
   resize();
   render();
 
-  return { canvasdiv, deck, destroy, render: scheduleRender, setHints };
+  return { canvasdiv, deck, destroy, render: scheduleRender, setHints, setVisible };
 
 }

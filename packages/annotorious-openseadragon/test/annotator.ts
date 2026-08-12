@@ -24,6 +24,18 @@ const viewer = OpenSeadragon({
 
 const anno = createOSDAnnotator(viewer, { multiSelect: true });
 
+// Debug hook for testing - not part of the published package.
+(window as any).__anno = anno;
+
+// Demonstrates AnnotationState (selected/hovered) actually reaching the
+// style callback: selected annotations render solid red, hovered ones get
+// a heavier stroke, everything else uses the library default.
+anno.setStyle((_annotation, state) => {
+  if (state?.selected) return { fill: '#e8341a', fillOpacity: 0.4, stroke: '#e8341a', strokeWidth: 3 };
+  if (state?.hovered) return { strokeWidth: 4 };
+  return undefined;
+});
+
 const log = document.getElementById('log') as HTMLDivElement;
 const line = (msg: string) => {
   const el = document.createElement('div');
@@ -36,6 +48,8 @@ anno.on('createAnnotation', a => line(`created ${a.id} (${a.target.selector.type
 anno.on('selectionChanged', selected => line(`selected [${selected.map(a => a.id.slice(0, 6)).join(', ')}]`));
 anno.on('updateAnnotation', a => line(`updated ${a.id}`));
 anno.on('deleteAnnotation', a => line(`deleted ${a.id}`));
+anno.on('clickAnnotation', a => line(`clicked ${a.id.slice(0, 6)}`));
+anno.on('viewportIntersect', visible => line(`viewport: ${visible.length} visible`));
 
 const toolButtons: Record<string, HTMLButtonElement> = {
   box: document.getElementById('tool-box') as HTMLButtonElement,

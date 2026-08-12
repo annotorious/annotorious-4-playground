@@ -1,6 +1,6 @@
 import type Map from 'ol/Map.js';
 import { draftAnnotationId, getTool, LOCAL_AUTHOR_ID } from '@annotorious/core-spatial';
-import type { DraftStore, DrawingTool, ImageIndexes, SpatialAnnotation, SpatialAnnotationTarget, SpatialShape, ToolContext, ToolHint } from '@annotorious/core-spatial';
+import type { DraftStore, DrawingMode, DrawingTool, ImageIndexes, SpatialAnnotation, SpatialAnnotationTarget, SpatialShape, ToolContext, ToolHint } from '@annotorious/core-spatial';
 import type { AnnotatorState, Filter } from '@annotorious/core';
 import { createImageTransforms, screenPixelsToLocalUnits } from './coordinates';
 import { eventToWorld, getRenderViewport } from './viewport';
@@ -13,6 +13,9 @@ export interface PointerHandlingOptions {
 
   multiSelect?: boolean;
 
+  /** @default 'drag' **/
+  drawingMode?: DrawingMode;
+
   /**
    * Called whenever the drawing tool's local hint set changes (or is
    * cleared), together with the `source` id of the image being drawn on -
@@ -21,6 +24,14 @@ export interface PointerHandlingOptions {
    * `tool-hint.ts`.
    */
   onHint?: (hints: ToolHint[], source: string | undefined) => void;
+
+  /**
+   * Called whenever the pointer goes down while hovering an annotation -
+   * a raw "the user just clicked on this shape" signal, independent of
+   * whether the click actually changes the selection (see the
+   * `clickAnnotation` lifecycle event).
+   */
+  onClickAnnotation?: (annotation: SpatialAnnotation, event: PointerEvent) => void;
 
   /** Read fresh on every hit-test - lets `setFilter` take effect without recreating pointer handling. **/
   getFilter?: () => Filter<SpatialAnnotation> | undefined;
@@ -44,6 +55,7 @@ export const createPointerHandling = <E>(
   let drawingEnabled = false;
   let currentToolName: string | undefined;
   let activeTool: DrawingTool | undefined;
+  let drawingMode: DrawingMode = opts.drawingMode || 'drag';
 
   const hitTestAt = (worldPoint: [number, number]): SpatialAnnotationTarget | undefined => {
     const registered = imageRegistry.getImageAt(worldPoint);
@@ -98,6 +110,7 @@ export const createPointerHandling = <E>(
 
     const ctx: ToolContext<SpatialShape> = {
       toLocalCoordinates,
+      drawingMode,
       onChange: (shape: SpatialShape | undefined) => {
         draftStore.set(LOCAL_AUTHOR_ID, shape
           ? { annotation: draftAnnotationId(LOCAL_AUTHOR_ID), selector: shape, ...(source ? { source } : {}) }
@@ -135,6 +148,14 @@ export const createPointerHandling = <E>(
   let pointerDownAt: { x: number, y: number } | undefined;
 
   const onPointerDown = (event: PointerEvent) => {
+    // Raw "clicked on this annotation" signal - fires regardless of drawing
+    // state or whether the click ends up changing the selection, matching
+    // v3's independent pointerdown-while-hovering listener.
+    if (hover.current) {
+      const hovered = store.getAnnotation(hover.current);
+      if (hovered) opts.onClickAnnotation?.(hovered, event);
+    }
+
     if (drawingEnabled) {
       if (activeTool) {
         activeTool.onPointerDown(event);
@@ -193,6 +214,14 @@ export const createPointerHandling = <E>(
     currentToolName = name;
   }
 
+  const setDrawingMode = (mode: DrawingMode) => {
+    // A little defensive on the outside API, matching v3. Deliberately
+    // doesn't cancel an in-progress shape (a tool reads `drawingMode` once,
+    // at construction - see drawing-tool.ts) - so this takes effect on the
+    // next shape, not by yanking away whatever's already half-drawn.
+    drawingMode = mode || 'drag';
+  }
+
   const cancelDrawing = () => {
     if (activeTool) endDrawingSession();
   }
@@ -209,6 +238,6 @@ export const createPointerHandling = <E>(
     viewport.removeEventListener('keydown', onKeyDown);
   }
 
-  return { cancelDrawing, destroy, getDrawingTool, isDrawingEnabled, setDrawingEnabled, setDrawingTool };
+  return { cancelDrawing, destroy, getDrawingTool, isDrawingEnabled, setDrawingEnabled, setDrawingMode, setDrawingTool };
 
 }

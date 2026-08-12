@@ -1,6 +1,7 @@
 import { createPolygon } from '../geometry';
 import type { Polygon } from '../geometry';
-import type { DrawingTool, ToolContext } from './drawing-tool';
+import { CLICK_TIMEOUT_MS } from './drawing-tool';
+import type { DrawingMode, DrawingTool, ToolContext } from './drawing-tool';
 import type { ToolHint } from './tool-hint';
 
 // Screen-space (not local/zoom-dependent) distance within which a click on
@@ -13,11 +14,22 @@ const CLOSE_THRESHOLD_PX = 8;
  * Click-to-add-vertex polygon drawing. Each click adds a vertex; clicking
  * back near the first vertex (or pressing Enter) closes the polygon.
  * Backspace removes the last vertex, Escape cancels the whole shape.
+ *
+ * `drawingMode` only changes *when* a vertex gets placed:
+ * - 'drag' (the default): immediately on pointerdown, no click-vs-drag
+ *   disambiguation - the more forgiving mode, and what this tool always did
+ *   before `drawingMode` existed.
+ * - 'click': on pointerup, and only if it follows its own pointerdown
+ *   within `CLICK_TIMEOUT_MS` - stricter, so a drag/pan gesture never
+ *   spuriously drops a vertex.
  */
 export const createPolygonTool = (ctx: ToolContext<Polygon>): DrawingTool => {
 
+  const mode: DrawingMode = ctx.drawingMode || 'drag';
+
   let vertices: [number, number][] = [];
   let firstVertexScreen: [number, number] | undefined;
+  let lastPointerDownAt = 0;
 
   const snap = (event: PointerEvent): [number, number] => {
     const local = ctx.toLocalCoordinates(event);
@@ -70,7 +82,7 @@ export const createPolygonTool = (ctx: ToolContext<Polygon>): DrawingTool => {
     ctx.onComplete(polygon);
   }
 
-  const onPointerDown = (event: PointerEvent) => {
+  const placeVertex = (event: PointerEvent) => {
     const point = snap(event);
     const screen: [number, number] = [event.clientX, event.clientY];
 
@@ -91,6 +103,11 @@ export const createPolygonTool = (ctx: ToolContext<Polygon>): DrawingTool => {
     }
   }
 
+  const onPointerDown = (event: PointerEvent) => {
+    lastPointerDownAt = performance.now();
+    if (mode === 'drag') placeVertex(event);
+  }
+
   const onPointerMove = (event: PointerEvent) => {
     if (vertices.length === 0) return;
 
@@ -101,7 +118,14 @@ export const createPolygonTool = (ctx: ToolContext<Polygon>): DrawingTool => {
     updateHints(point, isNearFirstVertex(screen));
   }
 
-  const onPointerUp = () => {}
+  const onPointerUp = (event: PointerEvent) => {
+    if (mode !== 'click') return;
+
+    // Not a genuine click (button held too long, e.g. a pan/drag) - ignore.
+    if (performance.now() - lastPointerDownAt > CLICK_TIMEOUT_MS) return;
+
+    placeVertex(event);
+  }
 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {

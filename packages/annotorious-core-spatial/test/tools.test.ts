@@ -78,6 +78,64 @@ describe('box tool', () => {
 
 });
 
+describe('box tool - click mode', () => {
+
+  it('places the origin on the first click, resizes on move, completes on the second click', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createBoxTool(ctx);
+
+    tool.onPointerDown(pointerEvent(10, 10));
+    tool.onPointerUp(pointerEvent(10, 10)); // click 1: places the origin
+
+    expect(ctx.onComplete).not.toHaveBeenCalled();
+
+    tool.onPointerMove(pointerEvent(50, 60)); // no button held - just tracks the pointer
+    expect(ctx.onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      geometry: expect.objectContaining({ x: 10, y: 10, w: 40, h: 50 })
+    }));
+
+    tool.onPointerDown(pointerEvent(50, 60));
+    tool.onPointerUp(pointerEvent(50, 60)); // click 2: completes
+
+    expect(ctx.onComplete).toHaveBeenCalledTimes(1);
+    expect(ctx.onComplete.mock.calls[0][0].geometry).toMatchObject({ x: 10, y: 10, w: 40, h: 50 });
+  });
+
+  it('ignores a pointerup that follows its pointerdown by more than the click timeout', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createBoxTool(ctx);
+
+    const now = vi.spyOn(performance, 'now');
+
+    now.mockReturnValue(0);
+    tool.onPointerDown(pointerEvent(10, 10));
+
+    now.mockReturnValue(400); // held for 400ms - not a click
+    tool.onPointerUp(pointerEvent(10, 10));
+
+    // Origin was never placed - a later move does nothing
+    tool.onPointerMove(pointerEvent(50, 60));
+    expect(ctx.onChange).not.toHaveBeenCalled();
+
+    now.mockRestore();
+  });
+
+  it('does not fall back to drag-mode behavior: holding and moving without a second click does not draw', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createBoxTool(ctx);
+
+    tool.onPointerDown(pointerEvent(10, 10));
+    tool.onPointerMove(pointerEvent(50, 60)); // still holding from the initial pointerdown
+
+    // No origin yet in click mode - pointerdown alone doesn't start the shape
+    expect(ctx.onChange).not.toHaveBeenCalled();
+  });
+
+});
+
 describe('point tool', () => {
 
   it('completes immediately on pointerdown', () => {
@@ -230,6 +288,56 @@ describe('polygon tool', () => {
     tool.onPointerDown(pointerEvent(0, 0));
     tool.onKeyDown!(keyEvent('Backspace')); // only vertex - resets
     expect(ctx.onHint).toHaveBeenLastCalledWith([]);
+  });
+
+});
+
+describe('polygon tool - click mode', () => {
+
+  it('does not place a vertex on pointerdown', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    expect(ctx.onChange).not.toHaveBeenCalled();
+    expect(ctx.onHint).not.toHaveBeenCalled();
+  });
+
+  it('places a vertex on a genuine click (pointerdown followed promptly by pointerup)', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createPolygonTool(ctx);
+
+    tool.onPointerDown(pointerEvent(0, 0));
+    tool.onPointerUp(pointerEvent(0, 0));
+    tool.onPointerDown(pointerEvent(100, 0));
+    tool.onPointerUp(pointerEvent(100, 0));
+    tool.onPointerDown(pointerEvent(50, 100));
+    tool.onPointerUp(pointerEvent(50, 100));
+    tool.onPointerDown(pointerEvent(2, 2)); // closing click, within CLOSE_THRESHOLD_PX of (0,0)
+    tool.onPointerUp(pointerEvent(2, 2));
+
+    expect(ctx.onComplete).toHaveBeenCalledTimes(1);
+    expect(ctx.onComplete.mock.calls[0][0].geometry.points).toEqual([[0, 0], [100, 0], [50, 100]]);
+  });
+
+  it('ignores a pointerup that follows its pointerdown by more than the click timeout', () => {
+    const ctx = makeContext<any>();
+    ctx.drawingMode = 'click';
+    const tool = createPolygonTool(ctx);
+
+    const now = vi.spyOn(performance, 'now');
+
+    now.mockReturnValue(0);
+    tool.onPointerDown(pointerEvent(0, 0));
+
+    now.mockReturnValue(400); // held for 400ms - not a click (e.g. a pan gesture)
+    tool.onPointerUp(pointerEvent(0, 0));
+
+    expect(ctx.onChange).not.toHaveBeenCalled();
+
+    now.mockRestore();
   });
 
 });

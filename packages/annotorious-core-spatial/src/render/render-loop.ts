@@ -262,6 +262,39 @@ export const createDeckRenderLoop = <Img>(
     targetStore.upsert(annotation.id, rowFor(target, stateFor(annotation.id)));
   }
 
+  /**
+   * Same resolution as `upsertAnnotationRow`, batched for many *brand-new*
+   * annotations at once (a bulk `setAnnotations`/`bulkUpsertAnnotations`
+   * call, which the core store already delivers as a single `created` array
+   * - see `store.ts`'s `emit`). A brand-new annotation was never in either
+   * `RowStore` before, so there's no "remove from the other store in case
+   * its shape type changed" step to do (that only matters for `updated`
+   * annotations - see `upsertAnnotationRow`). Routing these through
+   * `RowStore.upsertMany` instead of N calls to `upsertAnnotationRow` is
+   * what actually matters here: `upsertMany` concatenates the whole batch
+   * once, where N individual `upsert` calls would each copy the
+   * then-current array - O(n) apiece, O(n^2) for the batch (measured: this
+   * is what turned an initially-instant 100k-annotation generate button into
+   * a multi-second one). See `RowStore.upsertMany`'s doc.
+   */
+  const upsertAnnotationRowsBulk = (annotations: readonly SpatialAnnotation[]) => {
+    const filter = opts.getFilter?.();
+    const polygonBatch: RenderRow[] = [];
+    const pointBatch: RenderRow[] = [];
+
+    annotations.forEach(annotation => {
+      const image = adapter.getImage(annotation.target.source);
+      if (image === undefined || (filter && !filter(annotation))) return;
+
+      const target = adapter.targetToWorld(image, annotation.target);
+      const row = rowFor(target, stateFor(annotation.id));
+      (target.selector.type === ShapeType.POINT ? pointBatch : polygonBatch).push(row);
+    });
+
+    polygonRows.upsertMany(polygonBatch);
+    pointRows.upsertMany(pointBatch);
+  }
+
   // "Drafts" (in-progress, not-yet-committed shapes - the local user's own
   // live drawing preview, or a remote collaborator's) live in the same two
   // RowStores as committed annotations, under their draft id - draftStore
@@ -306,6 +339,12 @@ export const createDeckRenderLoop = <Img>(
 
     const filter = opts.getFilter?.();
 
+    // Batched via `upsertMany` (one concatenation for the whole rebuild),
+    // not `upsert` per row - see its doc for why doing this one row at a
+    // time turns an O(n) rebuild into an O(n^2) one at scale.
+    const polygonBatch: RenderRow[] = [];
+    const pointBatch: RenderRow[] = [];
+
     adapter.images().forEach(({ source, image }) => {
       const index = imageIndexes.get(source);
       if (!index) return;
@@ -317,9 +356,13 @@ export const createDeckRenderLoop = <Img>(
         }
 
         const target = adapter.targetToWorld(image, localTarget);
-        storeForType(target.selector.type).upsert(target.annotation, rowFor(target, stateFor(target.annotation)));
+        const row = rowFor(target, stateFor(target.annotation));
+        (target.selector.type === ShapeType.POINT ? pointBatch : polygonBatch).push(row);
       });
     });
+
+    polygonRows.upsertMany(polygonBatch);
+    pointRows.upsertMany(pointBatch);
 
     // Repopulates drafts into the now-cleared stores and calls submitLayers().
     onDraftsChanged();
@@ -430,7 +473,7 @@ export const createDeckRenderLoop = <Img>(
   // `Store.observe` (unlike nanostores' `.listen()`) has no return-value
   // unsubscribe - `unobserve` needs the exact same callback reference back.
   const onStoreChange = ({ changes }: StoreChangeEvent<SpatialAnnotation>) => {
-    (changes.created || []).forEach(upsertAnnotationRow);
+    if (changes.created?.length) upsertAnnotationRowsBulk(changes.created);
     (changes.updated || []).forEach(u => upsertAnnotationRow(u.newValue));
     (changes.deleted || []).forEach(a => {
       polygonRows.remove(a.id);

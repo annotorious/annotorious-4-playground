@@ -71,6 +71,33 @@ export const createRowStore = <Row>(idOf: (row: Row) => string) => {
     dirty.add(idx);
   }
 
+  /**
+   * Bulk-efficient insert for many *new* rows at once (initial load, a large
+   * paste/import, `setAnnotations` on a big batch) - one array concatenation
+   * for the whole batch, not one per row. `upsert`'s new-id path (`rows =
+   * [...rows, row]`) is fine for a single edit, but calling it N times in a
+   * row - once per row of an N-row batch - copies the whole array on every
+   * single one of those N calls: O(n) each, O(n^2) for the batch. That
+   * turned an initially-instant "generate 100,000 annotations" demo into a
+   * multi-second one (measured, not assumed) once bulk creation started
+   * flowing through this same one-row-at-a-time `upsert` path. Every id here
+   * must be genuinely new - existing ids are untouched by this call; a batch
+   * mixing new and updated rows should call `upsert` for the existing ones
+   * (cheap, in-place) and this only for the new ones.
+   */
+  const upsertMany = (newRows: readonly Row[]) => {
+    if (newRows.length === 0) return;
+
+    const startIdx = rows.length;
+    rows = [...rows, ...newRows];
+
+    newRows.forEach((row, i) => {
+      const idx = startIdx + i;
+      indexById.set(idOf(row), idx);
+      dirty.add(idx);
+    });
+  }
+
   const remove = (id: string) => {
     const idx = indexById.get(id);
     if (idx === undefined) return;
@@ -146,6 +173,7 @@ export const createRowStore = <Row>(idOf: (row: Row) => string) => {
       return idx === undefined ? undefined : rows[idx];
     },
     upsert,
+    upsertMany,
     remove,
     clear,
     consumeDirty

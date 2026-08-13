@@ -158,7 +158,6 @@ export const createPointerHandling = <E>(
     if (!selection.isEmpty() || pointerDownAt) return;
 
     const hit = hitTestAt(eventToWorld(map, event));
-    console.log("[DEBUG onPointerMove]", hit ? hit.annotation : null, "pointerDownAt:", pointerDownAt);
     hover.set(hit ? hit.annotation : null);
   }
 
@@ -181,10 +180,22 @@ export const createPointerHandling = <E>(
   // known screen position (now mapped through the new viewport) is what
   // catches that. Hit-testing is a cheap, O(log n) spatial query - fine to
   // run on every viewport-change frame, unlike a full layer rebuild.
+  //
+  // `view.getAnimating()`/`getInteracting()` matter here specifically
+  // because of `postrender`'s own timing: OL's default interactions apply
+  // kinetic inertia to `DragPan` (see `ol/interaction/defaults.js`), so
+  // releasing a fast pan keeps the view coasting - and `postrender` firing
+  // - for a couple hundred ms *after* pointerup, each frame re-hit-testing
+  // at the same stale `lastPointerEvent` screen position while the map
+  // slides underneath it. `pointerDownAt` alone (cleared synchronously on
+  // pointerup) doesn't cover that trailing coast at all; querying the
+  // view's own animating/interacting state does, for this and for any
+  // other view animation (e.g. an animated wheel-zoom) that isn't tied to
+  // the pointer being held down in the first place.
   const onPostRender = () => {
-    if (!lastPointerEvent || activeTool || drawingEnabled || !selection.isEmpty() || pointerDownAt) return;
+    const view = map.getView();
+    if (!lastPointerEvent || activeTool || drawingEnabled || !selection.isEmpty() || pointerDownAt || view.getAnimating() || view.getInteracting()) return;
     const hit = hitTestAt(eventToWorld(map, lastPointerEvent));
-    console.log("[DEBUG onPostRender]", hit ? hit.annotation : null, "pointerDownAt:", pointerDownAt);
     hover.set(hit ? hit.annotation : null);
   }
 

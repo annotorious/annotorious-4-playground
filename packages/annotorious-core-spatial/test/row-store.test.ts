@@ -166,6 +166,51 @@ describe('row store', () => {
 
 });
 
+describe('upsertMany', () => {
+
+  it('appends a whole batch of new rows in insertion order, in one call', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsertMany([row('a'), row('b'), row('c')]);
+
+    expect(store.data().map(r => r.id)).toEqual(['a', 'b', 'c']);
+    expect(store.size()).toBe(3);
+  });
+
+  it('appends after existing rows, not replacing them', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+    store.consumeDirty();
+
+    store.upsertMany([row('b'), row('c')]);
+
+    expect(store.data().map(r => r.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is a no-op for an empty batch, including no dirty entries', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsertMany([]);
+
+    expect(store.size()).toBe(0);
+    expect(store.consumeDirty()).toEqual([]);
+  });
+
+  it('reports the whole batch as one coalesced dirty range', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsertMany([row('a'), row('b'), row('c')]);
+
+    expect(store.consumeDirty()).toEqual([{ startRow: 0, endRow: 3 }]);
+  });
+
+  it('makes every id addressable via get/has, at the correct index', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsertMany([row('a'), row('b', 42)]);
+
+    expect(store.has('b')).toBe(true);
+    expect(store.get('b')?.value).toBe(42);
+  });
+
+});
+
 describe('shareDirtyReader', () => {
 
   it('calls the underlying getter only once for multiple reads within the same synchronous pass', () => {

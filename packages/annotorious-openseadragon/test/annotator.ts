@@ -1,6 +1,7 @@
 import OpenSeadragon from 'openseadragon';
 import { createBox, registerDefaultEditors, registerDefaultTools } from '@annotorious/core-spatial';
 import type { DrawingMode, SpatialAnnotation } from '@annotorious/core-spatial';
+import { attachAnnotationSync, createBroadcastChannelTransport } from '@annotorious/plugin-broadcast-sync';
 import { createOSDAnnotator } from '../src/annotator';
 
 registerDefaultTools();
@@ -38,9 +39,20 @@ const viewer = OpenSeadragon({
 
 const anno = createOSDAnnotator(viewer, { multiSelect: true });
 
+// One fixed channel for this demo - open this same page in two tabs (same
+// origin, since BroadcastChannel doesn't cross origins/ports) and they'll
+// sync live: local edits broadcast out, remote edits from the other tab
+// apply here with Origin.REMOTE. A real app would derive the channel name
+// from a room/document id instead of a constant. See
+// @annotorious/plugin-broadcast-sync's own demo for the reference transport
+// this is built on.
+const sync = attachAnnotationSync(anno, createBroadcastChannelTransport('annotorious-openseadragon-demo'));
+document.querySelector('#peer-id b')!.textContent = sync.peerId.slice(0, 8);
+
 // Debug hook for testing - not part of the published package.
 (window as any).__anno = anno;
 (window as any).__viewer = viewer;
+(window as any).__sync = sync;
 
 // Demonstrates AnnotationState (selected/hovered) actually reaching the
 // style callback: selected annotations render solid red, hovered ones get
@@ -205,7 +217,19 @@ perfGenerateButton.addEventListener('click', () => {
   const annotations = generateAnnotations(n);
 
   const started = performance.now();
-  anno.setAnnotations(annotations);
+  // `anno.setAnnotations(...)` always applies with `Origin.REMOTE` (see
+  // @annotorious/core's `annotator.ts`) - it's meant for "load/replace state
+  // from outside" (e.g. an initial fetch from a server), not "the user just
+  // made this edit", so autosave-on-local-edit style listeners don't
+  // mistake a bulk load for something that needs saving back. The broadcast
+  // sync plugin only ever broadcasts `Origin.LOCAL` writes for the same
+  // reason (so it never re-broadcasts what it just received from a peer) -
+  // which means `setAnnotations` output is invisible to it. Calling
+  // `store.syncAnnotations` directly instead keeps the exact same
+  // replace-the-whole-set semantics but defaults to `Origin.LOCAL`, so this
+  // demo's "Generate" button actually syncs to other peers, matching what a
+  // real user generating a batch of annotations would expect.
+  anno.state.store.syncAnnotations(annotations);
   line(`generated ${n} annotations (${(performance.now() - started).toFixed(1)}ms)`);
 });
 

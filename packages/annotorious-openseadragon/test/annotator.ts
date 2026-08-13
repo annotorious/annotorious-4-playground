@@ -38,6 +38,7 @@ const anno = createOSDAnnotator(viewer, { multiSelect: true });
 
 // Debug hook for testing - not part of the published package.
 (window as any).__anno = anno;
+(window as any).__viewer = viewer;
 
 // Demonstrates AnnotationState (selected/hovered) actually reaching the
 // style callback: selected annotations render solid red, hovered ones get

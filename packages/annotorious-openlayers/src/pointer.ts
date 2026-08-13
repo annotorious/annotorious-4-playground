@@ -106,7 +106,16 @@ export const createPointerHandling = <E>(
     // DeckGL, in world space) - only toLocalCoordinates is needed here.
     const { toLocalCoordinates } = createImageTransforms(map, registered);
 
-    suspendNavigation(map);
+    // Only 'drag' mode needs the map's own pan/zoom out of the way: it draws
+    // via one continuous press-drag-release gesture, which would otherwise
+    // double as a pan. 'click' mode is the opposite by design - each tool
+    // places a vertex/corner on a qualifying pointerup and otherwise ignores
+    // pointer movement entirely (see drawing-tool.ts's doc and each tool's
+    // CLICK_TIMEOUT_MS-gated onPointerUp, which already treats a slow/moved
+    // pointerup as "not a genuine click, e.g. a pan" and ignores it) -
+    // specifically so the user can freely pan/zoom between clicks to
+    // reposition the view before placing the next point.
+    if (drawingMode === 'drag') suspendNavigation(map);
 
     const ctx: ToolContext<SpatialShape> = {
       toLocalCoordinates,

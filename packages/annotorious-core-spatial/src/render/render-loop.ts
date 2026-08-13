@@ -1,29 +1,21 @@
 import { Deck, OrthographicView } from '@deck.gl/core';
 import type { AnnotationState, Filter, Store, StoreChangeEvent, ViewportState } from '@annotorious/core';
 import type { Bounds } from '../geometry';
+import { ShapeType } from '../geometry';
 import type { DraftStore } from '../draft-store';
 import type { ImageIndexes } from '../image-indexes';
 import type { SpatialAnnotation, SpatialAnnotationTarget } from '../model';
-import { isDraftAnnotationId } from '../draft-store';
 import { markAsApplicationRegion } from './display-container';
-import { buildAnnotationLayers } from './layers';
+import { buildRowLayers, DEFAULT_STYLE } from './layers';
+import type { RenderRow, RenderStyle } from './layers';
+import { createRowStore } from './row-store';
 import { buildHintLayers } from './hint-layers';
 import type { RenderViewport } from './render-viewport';
-import type { RenderStyle } from './layers';
 import type { ToolHint } from '../tools/tool-hint';
 
 export interface DeckRenderLoopOptions {
 
-  /**
-   * `state` is always explicitly `{}` for the base layer (see module doc -
-   * base candidates are never selected/hovered *by definition*, that's what
-   * the highlight layer is for) and the real, live state for the highlight
-   * layer. Never re-derive selected/hovered independently here (e.g. from a
-   * closure over live selection/hover state) - a style callback that reads
-   * live state itself would bake in whatever happened to be true at the
-   * arbitrary moment the base layer was last rebuilt, permanently, until
-   * some later, unrelated rebuild happened to overwrite it.
-   */
+  /** Read fresh whenever a row is (re)built - see the module doc for how state reaches this. **/
   getStyle?: (target: SpatialAnnotationTarget, state: AnnotationState) => RenderStyle | undefined;
 
   /** Read fresh on every render - lets `setFilter` take effect without recreating the overlay. **/
@@ -33,9 +25,9 @@ export interface DeckRenderLoopOptions {
 
 /**
  * The handful of things that differ between viewer backends - everything
- * else in the render loop (caching, coalescing, debouncing, style,
- * hit-testing scope) is identical between them and lives here instead of
- * being duplicated per package.
+ * else in the render loop (row bookkeeping, style, hit-testing scope) is
+ * identical between them and lives here instead of being duplicated per
+ * package.
  */
 export interface ViewerAdapter<Img> {
 
@@ -58,7 +50,7 @@ export interface ViewerAdapter<Img> {
 
 }
 
-const DRAFT_STYLE: RenderStyle = { fillColor: [26, 115, 232, 60], lineColor: [26, 115, 232, 255], lineWidth: 2 };
+const DRAFT_STYLE: Required<RenderStyle> = { fillColor: [26, 115, 232, 60], lineColor: [26, 115, 232, 255], lineWidth: 2 };
 
 // How long to wait, after the viewport stops changing, before recomputing
 // viewportIntersect - see module doc below.
@@ -68,52 +60,79 @@ const VIEWPORT_SETTLE_MS = 500;
  * Owns the DeckGL canvas and render loop for a spatial annotator. Shared
  * across viewer backends (OpenSeadragon, OpenLayers, ...) via `ViewerAdapter`
  * - each backend supplies only how to read its own viewport and transform
- * coordinates; everything else (caching, coalescing, style, the pan/zoom
- * fast path) is identical regardless of which viewer it's attached to, so
- * it lives here once instead of being copy-pasted per package.
+ * coordinates; everything else (row bookkeeping, style, the pan/zoom fast
+ * path) is identical regardless of which viewer it's attached to, so it
+ * lives here once instead of being copy-pasted per package.
  *
- * The base layer (`rebuildLayers`) is handed *every* committed annotation,
- * unfiltered by viewport - no CPU-side viewport culling, no level-of-detail
+ * Every committed annotation (plus drafts) is handed to deck.gl unfiltered
+ * by viewport - no CPU-side viewport culling, no level-of-detail
  * simplification. deck.gl already culls what's off-screen via the camera
  * transform (that's what the GPU rasterizer does for free); duplicating
  * that decision on the CPU, or second-guessing it with our own LOD
  * simplification, was strictly worse than just handing deck.gl the data and
  * letting it do the one job it's built for. Concretely: pan/zoom
  * (`notifyViewportChanged`) only ever updates the camera (`paintCamera`) -
- * it never touches the base layer at all, exactly like a plain deck.gl
- * integration with no annotation layer on top would behave. `rebuildLayers`
- * is triggered *only* by an actual change to the candidate set: store/draft
- * mutations, images added/removed, filter/style/hint changes.
+ * it never touches annotation data at all.
  *
- * Hover, selection, and active edits are kept off `rebuildLayers` entirely
- * - see `setHighlighted`/`markActivelyEditing`. A style callback that
- * reacts to `{selected, hovered}` state (a common, expected thing to want)
- * would otherwise force a full rebuild every time either changes - and
- * hover in particular fires on every mousemove, so with thousands of
- * annotations on screen the hovered id changes almost continuously as the
- * pointer crosses shape boundaries. The few currently "active" ids (locally
- * selected/hovered, or anywhere mid-edit) render as a small second layer
- * drawn on top of the base one instead, so that traffic never touches the
- * rest.
+ * Annotation data lives in exactly two `RowStore`s (`polygonRows`,
+ * `pointRows` - one deck.gl layer each), each a persistent,
+ * densely-packed array where every annotation keeps a stable index across
+ * edits (see row-store.ts). A store/draft mutation, a hover/selection
+ * change, or a filter/style change all boil down to the same operation:
+ * mutate the handful of rows that actually changed, then hand deck.gl the
+ * (mostly unchanged) array back.
  *
- * This is also what keeps editing - local *or remote* - responsive.
- * `onStoreChange` recognizes a target update to an already-active id as
- * "just an edit in progress" and refreshes only the active layer
- * synchronously (so the shape tracks the gesture, not just the editor's
- * handles) while coalescing the base layer's catch-up to at most once per
- * animation frame - a stale "ghost" of the shape at its pre-edit position,
- * in the base layer, for at most one frame, rather than a full rebuild on
- * every single mousemove of the drag. Critically, `markActivelyEditing`
- * doesn't care who caused the target update: a shape a *remote*
- * collaborator is dragging (arriving as ordinary `Origin.REMOTE` store
- * writes, indistinguishable in shape from a local edit) gets exactly the
- * same treatment as one the local user is dragging.
+ * For `pointRows`, that handoff goes through deck.gl's own `_dataDiff`
+ * partial-update mechanism (see `layers.ts`), which re-invokes accessors
+ * and re-uploads GPU buffer bytes for only the changed rows - verified
+ * (against deck.gl's actual source, not just the docs, and empirically
+ * against a real GPU) to make a single-row edit cost the same regardless of
+ * whether there are 1,000 or 300,000 other points on screen.
+ *
+ * `polygonRows` does NOT get the same treatment, and this is a deliberate,
+ * measured tradeoff, not an oversight: `_dataDiff`-driven partial updates
+ * were built for `PolygonLayer` too, and were wrong - verified (real
+ * browser, real GPU, pixel-level screenshots) to silently fail to visually
+ * apply a row's changed geometry/color, even for the simplest single-shape
+ * edit. `layers.ts`'s module doc has the full story and the working theory
+ * (a `CompositeLayer`-specific limitation, not something in this module's
+ * control). `polygonRows` therefore always gets a full recompute - cheap to
+ * *construct* (RowStore's O(1) bookkeeping and stable indices still avoid
+ * the old architecture's per-edit row/style reconstruction), but O(n) for
+ * deck.gl to actually redraw. Concretely: editing one box out of 100,000
+ * runs at roughly 7-8fps, not the 60fps a point annotation gets under the
+ * same edit. An ordinary drag - local *or* a remote collaborator's,
+ * arriving as ordinary `Origin.REMOTE` store writes indistinguishable in
+ * shape from a local edit - touches exactly one row either way:
+ * `onStoreChange` re-resolves that one annotation's row synchronously, on
+ * every single target update, with no debounce and no second "active"
+ * layer to reconcile later - multiple people editing different *points* at
+ * once costs O(number of concurrent edits); multiple people editing
+ * different *polygons* at once costs O(concurrent edits × total polygon
+ * count), same as the pre-rewrite architecture.
+ *
+ * This replaced an earlier design that hand-rolled a "base/active layer"
+ * split plus a per-id settle-debounce timer specifically to avoid a full
+ * rebuild on every edit - a problem `_dataDiff` solves natively for points,
+ * more simply and dramatically faster at 100k-300k rows (measured); for
+ * polygons it's a wash on raw redraw cost, but still simpler and removes
+ * the settle-debounce lag (a remote collaborator's polygon edit is visible
+ * immediately, not up to 500ms later).
  *
  * `viewportIntersect` (the "visible annotations" lifecycle signal) is the
  * one thing that still needs to know what's actually on screen, so it's
  * the one thing still driven by a debounced (`scheduleSettledRefresh`)
- * spatial query after pan/zoom - informational, not render-critical, so it
- * doesn't need per-frame freshness.
+ * spatial query - after pan/zoom, *and* after a store change (see
+ * `onStoreChange`) - informational, not render-critical, so it doesn't need
+ * per-edit freshness. deck.gl has no public API for "which instances
+ * survived GPU culling this frame", so this still goes through the CPU
+ * spatial index - not a hand-rolled workaround, just the only tool that
+ * answers this particular question. It does need to stay debounced rather
+ * than synchronous, though: it sorts and joins every currently-visible id
+ * into a dedup key, which was measured (not assumed) to cost 100ms+ on its
+ * own at 100k+ mostly-visible annotations - cheap once per settled burst,
+ * but exactly the kind of per-edit cost the rest of this module works to
+ * avoid if it ran on every single store change synchronously instead.
  */
 export const createDeckRenderLoop = <Img>(
   mount: HTMLElement,
@@ -172,198 +191,176 @@ export const createDeckRenderLoop = <Img>(
   let lastViewportKey = '';
 
   let hintState: { hints: ToolHint[], image: Img } | undefined;
-
-  /** The active drawing tool's local hints (if any) - see `tool-hint.ts`. Unlike drafts, purely local: never read from `draftStore`. **/
-  const setHints = (hints: ToolHint[], image?: Img) => {
-    hintState = (hints.length > 0 && image !== undefined) ? { hints, image } : undefined;
-    scheduleFrame();
-  }
-
-  let draftsCache: SpatialAnnotationTarget[] = [];
-
-  const rebuildDrafts = () => {
-    draftsCache = draftStore.all().flatMap(({ target }) => {
-      const image = adapter.getImage(target.source);
-      return image !== undefined ? [adapter.targetToWorld(image, target)] : [];
-    });
-  }
-
-  /** Every committed target, across every registered image, transformed to world space - unfiltered by viewport (see module doc). **/
-  const getAllCandidates = (): SpatialAnnotationTarget[] => {
-    const filter = opts.getFilter?.();
-
-    return adapter.images().flatMap(({ source, image }) => {
-      const index = imageIndexes.get(source);
-      if (!index) return [];
-
-      const targets = filter
-        ? index.all().filter(t => {
-            const annotation = store.getAnnotation(t.annotation);
-            return annotation && filter(annotation);
-          })
-        : index.all();
-
-      return targets.map(target => adapter.targetToWorld(image, target));
-    });
-  }
-
-  // Base candidates are never selected/hovered *by definition* - that's
-  // what the highlight layer is for - so this always passes an empty state,
-  // regardless of what's actually selected/hovered live right now. See the
-  // warning on `DeckRenderLoopOptions.getStyle` for why that matters.
-  const baseStyle = (target: SpatialAnnotationTarget): RenderStyle | undefined =>
-    isDraftAnnotationId(target.annotation) ? DRAFT_STYLE : opts.getStyle?.(target, {});
-
-  // The submitted layers are kept in three named pieces and always merged
-  // before being handed to deck.gl - see `submitLayers`. Splitting them out
-  // is what lets an active-id change (see `activeLayers` below) update
-  // without touching the other two, instead of rebuilding a single combined
-  // array (which would force deck.gl to re-diff and potentially re-upload
-  // everything just because the array reference changed).
-  let baseLayers: ReturnType<typeof buildAnnotationLayers> = [];
   let hintLayersCache: ReturnType<typeof buildHintLayers> = [];
-  let activeLayers: ReturnType<typeof buildAnnotationLayers> = [];
 
+  // One RowStore per deck.gl layer - see row-store.ts and the module doc
+  // above for why a stable per-annotation index is what makes a single edit
+  // cheap regardless of total annotation count.
+  const polygonRows = createRowStore<RenderRow>(r => r.target.annotation);
+  const pointRows = createRowStore<RenderRow>(r => r.target.annotation);
+
+  const storeForType = (type: ShapeType) => type === ShapeType.POINT ? pointRows : polygonRows;
+
+  // Selected/hovered ids and their *actual* live state - the only place
+  // that ever flows real selected/hovered values into a style callback, so
+  // a row rebuilt for any other reason (a plain edit, a filter change)
+  // always resolves the correct, current state instead of accidentally
+  // baking in whatever happened to be true when it was last touched.
+  let currentHighlightStates: Map<string, AnnotationState> = new Map();
+  const stateFor = (id: string): AnnotationState => currentHighlightStates.get(id) || {};
+
+  const resolveStyle = (target: SpatialAnnotationTarget, state: AnnotationState): Required<RenderStyle> => ({
+    ...DEFAULT_STYLE,
+    ...opts.getStyle?.(target, state)
+  });
+
+  const rowFor = (target: SpatialAnnotationTarget, state: AnnotationState): RenderRow => ({
+    target,
+    style: resolveStyle(target, state)
+  });
+
+  // `getDirtyPointRanges` passes `consumeDirty` itself through to
+  // `buildRowLayers`, NOT its already-called result - deck.gl doesn't
+  // reconcile `deck.setProps({ layers })` synchronously, so several
+  // `submitLayers()` calls in a row (e.g. a fast hover sweep, or several
+  // store writes in one tick) construct several layer instances of which
+  // only the last is ever actually diffed; draining `consumeDirty()` here
+  // eagerly would silently lose whatever was dirtied by the discarded ones.
+  // Only `pointRows` uses this at all - `polygonRows` always gets a full
+  // rebuild, so its own dirty tracking (still maintained by RowStore, just
+  // unread here) isn't consulted. See `dataDiffPropFor`'s and
+  // `buildRowLayers`'s doc in layers.ts for the full explanation of both.
   const submitLayers = () => {
-    deck.setProps({ layers: [...baseLayers, ...hintLayersCache, ...activeLayers] });
+    const layers = buildRowLayers(polygonRows.data(), pointRows.data(), {
+      getDirtyPointRanges: pointRows.consumeDirty
+    });
+
+    deck.setProps({ layers: [...layers, ...hintLayersCache] });
     deck.redraw();
   }
 
   /**
-   * Rebuilds the *base* deck.gl layers from every committed annotation
-   * (plus in-progress drafts), applying the current filter. This is the
-   * expensive path - call it (or schedule it via `scheduleFrame`) when the
-   * candidate set itself, or the filter, can have changed. Deliberately NOT
-   * triggered by hover/selection changes - see `setHighlighted`. Never
-   * called from the per-frame viewport handler either - see `paintCamera`
-   * for that.
+   * Resolves one committed annotation's row from scratch (current target,
+   * current filter visibility, current highlight state) and writes it into
+   * whichever RowStore it belongs to - removing it from the other one first,
+   * in case its shape type ever changed (editors never actually do this,
+   * but staying correct here is free). This is the one function that
+   * handles *every* kind of annotation change uniformly - a target edit, a
+   * body/metadata edit (a style callback can read either), a reassignment
+   * to a different image - since all of them can affect what a row should
+   * look like, and none of them need to touch any other row.
    */
-  const rebuildLayers = () => {
-    const candidates = [...getAllCandidates(), ...draftsCache];
+  const upsertAnnotationRow = (annotation: SpatialAnnotation) => {
+    const image = adapter.getImage(annotation.target.source);
+    const filter = opts.getFilter?.();
+    const visible = image !== undefined && (!filter || filter(annotation));
 
-    baseLayers = buildAnnotationLayers(candidates, { ...opts, getStyle: baseStyle });
+    if (!visible) {
+      polygonRows.remove(annotation.id);
+      pointRows.remove(annotation.id);
+      return;
+    }
 
-    hintLayersCache = hintState
-      ? buildHintLayers(hintState.hints.map(h => adapter.hintToWorld(hintState!.image, h)))
-      : [];
+    const target = adapter.targetToWorld(image!, annotation.target);
+    const targetStore = storeForType(target.selector.type);
+    const otherStore = targetStore === polygonRows ? pointRows : polygonRows;
+    otherStore.remove(annotation.id);
+    targetStore.upsert(annotation.id, rowFor(target, stateFor(annotation.id)));
+  }
+
+  // "Drafts" (in-progress, not-yet-committed shapes - the local user's own
+  // live drawing preview, or a remote collaborator's) live in the same two
+  // RowStores as committed annotations, under their draft id - draftStore
+  // holds only the handful currently being drawn, so this is always O(number
+  // of drafts), never O(total annotation count), same as `onStoreChange`.
+  let previousDraftIds = new Set<string>();
+
+  const onDraftsChanged = () => {
+    const currentIds = new Set<string>();
+
+    draftStore.all().forEach(({ target }) => {
+      const image = adapter.getImage(target.source);
+      if (!image) return;
+
+      const worldTarget = adapter.targetToWorld(image, target);
+      currentIds.add(worldTarget.annotation);
+      storeForType(worldTarget.selector.type).upsert(worldTarget.annotation, { target: worldTarget, style: DRAFT_STYLE });
+    });
+
+    previousDraftIds.forEach(id => {
+      if (!currentIds.has(id)) {
+        polygonRows.remove(id);
+        pointRows.remove(id);
+      }
+    });
+    previousDraftIds = currentIds;
 
     submitLayers();
   }
 
-  // "Active" ids are rendered via the small side layer instead of the base
-  // one - two independent sources feed this set, and an id can be in both
-  // at once (the shape you're locally dragging is both):
-  //
-  // 1. Locally selected/hovered ids, with their real {selected, hovered}
-  //    state - see `setHighlighted`, called from the host's hover/selection
-  //    subscriptions.
-  // 2. Any id - local OR remote - with a target-only change since it last
-  //    settled - see `markActivelyEditing`/`onStoreChange`. This is what
-  //    keeps a REMOTE collaborator's drag exactly as cheap as a local one:
-  //    without it, a shape nobody local has selected or hovered would fall
-  //    straight through `onStoreChange`'s check into a full rebuild on
-  //    every one of the remote author's mousemove-driven target updates -
-  //    and with several people editing different shapes at once, each of
-  //    them would be forcing that on every other viewer, continuously.
-  //
-  // (1) is replaced wholesale on every `setHighlighted` call. (2) is added
-  // per-id by `markActivelyEditing` and removed per-id, independently, once
-  // that specific id has gone `ACTIVE_EDIT_SETTLE_MS` without a further
-  // target update - see `scheduleEditSettle`.
-  let currentHighlightStates: Map<string, AnnotationState> = new Map();
-  const activelyEditingIds = new Set<string>();
-  const editSettleTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * Full, synchronous resync of every row from scratch - the one expensive
+   * (O(total annotation count)) path in this module, reserved for events
+   * that can affect *any* row at once: initial load, a filter or style
+   * change, or an image being added/removed. Never called from a per-edit
+   * or per-frame path - see `upsertAnnotationRow`/`onDraftsChanged` for
+   * those.
+   */
+  const fullRebuild = () => {
+    polygonRows.clear();
+    pointRows.clear();
 
-  // Same idea as VIEWPORT_SETTLE_MS, for the same reason (batch a fast
-  // stream of updates into one eventual catch-up instead of reacting to
-  // every step) - kept as its own constant since it governs a conceptually
-  // different debounce, even though the value happens to match.
-  const ACTIVE_EDIT_SETTLE_MS = 500;
+    const filter = opts.getFilter?.();
 
-  const isActive = (id: string): boolean => currentHighlightStates.has(id) || activelyEditingIds.has(id);
+    adapter.images().forEach(({ source, image }) => {
+      const index = imageIndexes.get(source);
+      if (!index) return;
 
-  /** Rebuilds just the active-ids layer - cheap, independent of total annotation count (see module doc). **/
-  const rebuildActiveLayer = () => {
-    const states = new Map<string, AnnotationState>(currentHighlightStates);
-    activelyEditingIds.forEach(id => { if (!states.has(id)) states.set(id, {}); });
+      index.all().forEach(localTarget => {
+        if (filter) {
+          const annotation = store.getAnnotation(localTarget.annotation);
+          if (!annotation || !filter(annotation)) return;
+        }
 
-    const active: SpatialAnnotationTarget[] = [];
-    const stateByTarget = new Map<SpatialAnnotationTarget, AnnotationState>();
-
-    states.forEach((state, id) => {
-      const annotation = store.getAnnotation(id);
-      if (!annotation) return;
-
-      const image = adapter.getImage(annotation.target.source);
-      if (image === undefined) return;
-
-      const target = adapter.targetToWorld(image, annotation.target);
-      active.push(target);
-      stateByTarget.set(target, state);
+        const target = adapter.targetToWorld(image, localTarget);
+        storeForType(target.selector.type).upsert(target.annotation, rowFor(target, stateFor(target.annotation)));
+      });
     });
 
-    const activeStyle = (target: SpatialAnnotationTarget): RenderStyle | undefined =>
-      isDraftAnnotationId(target.annotation) ? DRAFT_STYLE : opts.getStyle?.(target, stateByTarget.get(target) || {});
-
-    activeLayers = active.length > 0
-      ? buildAnnotationLayers(active, { ...opts, getStyle: activeStyle, idPrefix: 'active' })
-      : [];
-
-    submitLayers();
+    // Repopulates drafts into the now-cleared stores and calls submitLayers().
+    onDraftsChanged();
   }
 
   /**
    * Call whenever the set of selected/hovered ids (and their state)
-   * changes. `states` carries the *actual* live state per id - this is the
-   * only place that ever flows real selected/hovered values into a style
-   * callback (see the warning on `DeckRenderLoopOptions.getStyle`).
-   *
-   * Synchronous, not coalesced through `requestAnimationFrame` like
-   * `scheduleFrame` - that would add up to a frame of visible lag between
-   * the pointer and the highlight following it, and there's nothing here to
-   * protect against: `hover`/`selection` are nanostores atoms that already
-   * no-op a `.set()` of an unchanged value (see hover.ts/selection.ts), so
-   * this only actually runs on a real boundary crossing, not on every raw
-   * pointermove - and even a burst of those is cheap, since it only ever
-   * touches the 0-few active ids, never the full candidate set (see module
-   * doc above).
+   * changes. `states` carries the *actual* live state per id. Touches only
+   * the ids that were highlighted before, are highlighted now, or both -
+   * never the full candidate set - so a hover crossing shape boundaries
+   * stays cheap no matter how many annotations exist. Synchronous, not
+   * coalesced: `hover`/`selection` are nanostores atoms that already no-op
+   * a `.set()` of an unchanged value, so this only actually runs on a real
+   * boundary crossing, and even a burst of those is cheap for the same
+   * reason a single edit is.
    */
   const setHighlighted = (states: Map<string, AnnotationState>) => {
+    const touched = new Set<string>([...currentHighlightStates.keys(), ...states.keys()]);
     currentHighlightStates = states;
-    rebuildActiveLayer();
+
+    touched.forEach(id => {
+      const annotation = store.getAnnotation(id);
+      if (annotation) upsertAnnotationRow(annotation);
+    });
+
+    submitLayers();
   }
 
-  /**
-   * Marks `id` as actively editing - added to the cheap side layer
-   * regardless of local selection/hover - and (re)schedules its solo
-   * settle timer. Once `ACTIVE_EDIT_SETTLE_MS` passes with no further call
-   * for this specific id, it folds back into the base layer: the base
-   * layer's copy of this shape has been stale (at its pre-edit position)
-   * for as long as the edit was in progress (see the module doc on why
-   * that's an acceptable trade), so folding back means both removing it
-   * from the active layer *and* scheduling a base rebuild to pick up its
-   * settled, correct position - unless it's still locally highlighted, in
-   * which case the active layer is already showing it correctly and
-   * neither is needed.
-   */
-  const scheduleEditSettle = (id: string) => {
-    const existing = editSettleTimeouts.get(id);
-    if (existing) clearTimeout(existing);
-
-    editSettleTimeouts.set(id, setTimeout(() => {
-      editSettleTimeouts.delete(id);
-      activelyEditingIds.delete(id);
-
-      if (!currentHighlightStates.has(id)) {
-        rebuildActiveLayer();
-        scheduleFrame();
-      }
-    }, ACTIVE_EDIT_SETTLE_MS));
-  }
-
-  const markActivelyEditing = (id: string) => {
-    activelyEditingIds.add(id);
-    scheduleEditSettle(id);
+  /** The active drawing tool's local hints (if any) - see `tool-hint.ts`. Unlike drafts, purely local: never read from `draftStore`. **/
+  const setHints = (hints: ToolHint[], image?: Img) => {
+    hintState = (hints.length > 0 && image !== undefined) ? { hints, image } : undefined;
+    hintLayersCache = hintState
+      ? buildHintLayers(hintState.hints.map(h => adapter.hintToWorld(hintState!.image, h)))
+      : [];
+    submitLayers();
   }
 
   /**
@@ -414,28 +411,6 @@ export const createDeckRenderLoop = <Img>(
     }
   }
 
-  // Coalesces rapid-fire triggers within the same animation frame (many
-  // draft updates during one drag gesture, tool hints on every mousemove,
-  // images added/removed, filter/style changes, and the base layer's
-  // catch-up during an active edit - see onStoreChange) into a single
-  // rebuild of the *base* layers. `draftsDirty` tracks whether the draft
-  // cache needs refreshing first - `rebuildLayers` always runs on a
-  // scheduled frame, since a filter/style/hint change (or an edit's
-  // catch-up) needs it even when drafts haven't changed. Selection/hover
-  // changes deliberately do NOT go through this - see `setHighlighted`.
-  let draftsDirty = false;
-  let frameScheduled = false;
-
-  const scheduleFrame = () => {
-    if (frameScheduled) return;
-    frameScheduled = true;
-    requestAnimationFrame(() => {
-      frameScheduled = false;
-      if (draftsDirty) { draftsDirty = false; rebuildDrafts(); }
-      rebuildLayers();
-    });
-  }
-
   // After the viewport stops changing for VIEWPORT_SETTLE_MS: recompute
   // viewportIntersect. See module doc for why this is debounced rather than
   // run every frame, and why it's the only thing pan/zoom still triggers.
@@ -454,66 +429,50 @@ export const createDeckRenderLoop = <Img>(
 
   /** Call when an image is registered/unregistered (a real, if rare, data-shape change). **/
   const notifyImagesChanged = () => {
-    scheduleFrame();
+    fullRebuild();
     updateViewportIntersect();
   }
 
-  // Synchronous, NOT through scheduleFrame: a store change to an active id
-  // needs the *active* layer to render in the same synchronous pass as
-  // whatever's driving it (the local editor's own, also-synchronous, handle
-  // repositioning; or just the next remote update arriving), or the shape
-  // visibly lags behind. The (expensive) base layer's catch-up is coalesced
-  // instead, via `scheduleFrame` - see the module doc for why that split is
-  // safe, and why it applies equally to a local edit and a remote one:
-  // `markActivelyEditing` adds *any* target-updated id to the active set
-  // regardless of who changed it, so a shape someone else is dragging gets
-  // exactly the same cheap treatment a shape the local user is dragging
-  // does - the alternative (falling through to `rebuildLayers` for every
-  // step of every remote author's gesture) is precisely the "multiple
-  // people editing simultaneously" scenario that would make this unusable.
-  //
   // `Store.observe` (unlike nanostores' `.listen()`) has no return-value
   // unsubscribe - `unobserve` needs the exact same callback reference back.
   const onStoreChange = ({ changes }: StoreChangeEvent<SpatialAnnotation>) => {
-    const changedIds = [
-      ...(changes.created || []).map(a => a.id),
-      ...(changes.updated || []).map(u => u.newValue.id),
-      ...(changes.deleted || []).map(a => a.id)
-    ];
+    (changes.created || []).forEach(upsertAnnotationRow);
+    (changes.updated || []).forEach(u => upsertAnnotationRow(u.newValue));
+    (changes.deleted || []).forEach(a => {
+      polygonRows.remove(a.id);
+      pointRows.remove(a.id);
+    });
 
-    (changes.updated || []).forEach(u => { if (u.targetUpdated) markActivelyEditing(u.newValue.id); });
+    submitLayers();
 
-    const allActive = changedIds.length > 0 && changedIds.every(isActive);
-
-    if (allActive) {
-      rebuildActiveLayer();
-      scheduleFrame();
-    } else {
-      rebuildLayers();
-    }
-
-    updateViewportIntersect();
+    // Debounced, not synchronous - see `scheduleSettledRefresh`'s doc.
+    // `updateViewportIntersect` sorts and joins every currently-visible id
+    // into a dedup key, an O(visible count log visible count) cost that's
+    // negligible once per settled burst but was measured (not assumed) to
+    // cost 100ms+ on its own at 100k+ mostly-visible annotations - calling
+    // it synchronously here would reintroduce exactly the kind of
+    // per-keystroke-of-a-drag cost the rest of this module works to avoid,
+    // for a value (`viewportIntersect`) that's explicitly documented
+    // elsewhere as informational and fine to lag by up to
+    // `VIEWPORT_SETTLE_MS`.
+    scheduleSettledRefresh();
   }
   store.observe(onStoreChange);
 
-  // Coalesced, not synchronous: unlike a store change during an editor
-  // drag, there's no separately-rendered DOM overlay a draft needs to stay
-  // in lockstep with (drawing tools render no DOM of their own), so the
-  // same per-frame coalescing as other not-already-frame-gated triggers is
-  // enough here.
-  const unsubscribeDrafts = draftStore.subscribe(() => { draftsDirty = true; scheduleFrame(); });
+  const unsubscribeDrafts = draftStore.subscribe(onDraftsChanged);
 
   const onWindowResize = () => { resize(); paintCamera(); }
   window.addEventListener('resize', onWindowResize);
 
-  // Full, synchronous resync of everything - draft cache, layers, and
-  // viewportIntersect. Called once at construction, and available for
-  // callers whose change isn't covered by the triggers above (e.g. a
-  // viewer-specific "image finished loading" event).
+  /**
+   * Full, synchronous resync of everything - rows and viewportIntersect.
+   * Called once at construction, and available for callers whose change
+   * isn't covered by the triggers above (e.g. a viewer-specific "image
+   * finished loading" event).
+   */
   const refresh = () => {
     resize();
-    rebuildDrafts();
-    rebuildLayers();
+    fullRebuild();
     updateViewportIntersect();
   }
 
@@ -522,7 +481,6 @@ export const createDeckRenderLoop = <Img>(
     store.unobserve(onStoreChange);
     unsubscribeDrafts();
     clearTimeout(settleTimeout);
-    editSettleTimeouts.forEach(t => clearTimeout(t));
     deck.finalize();
     canvasdiv.remove();
   }
@@ -536,7 +494,7 @@ export const createDeckRenderLoop = <Img>(
     notifyImagesChanged,
     notifyViewportChanged,
     refresh,
-    render: scheduleFrame,
+    render: fullRebuild,
     setHighlighted,
     setHints,
     setVisible

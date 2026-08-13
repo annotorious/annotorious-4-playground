@@ -188,4 +188,63 @@ describe('buildRowLayers', () => {
 
   });
 
+  describe('hover, via deck.gl\'s native highlightedObjectIndex (not row mutation)', () => {
+
+    it('wires highlightedPolygonIndex/hoverFillColor/hoverLineColor to the fill and stroke layers', () => {
+      const layers = buildRowLayers([row('a', createBox(0, 0, 100, 100))], [], {
+        getDirtyPolygonRanges: noDirty,
+        getDirtyPointRanges: noDirty,
+        highlightedPolygonIndex: 0,
+        hoverFillColor: [1, 2, 3, 255],
+        hoverLineColor: [4, 5, 6, 255]
+      });
+
+      const fillLayer = layers.find(l => l instanceof SolidPolygonLayer) as SolidPolygonLayer<RenderRow>;
+      const strokeLayer = layers.find(l => l instanceof PathLayer) as PathLayer<RenderRow>;
+
+      expect(fillLayer.props.highlightedObjectIndex).toBe(0);
+      expect(fillLayer.props.highlightColor).toEqual([1, 2, 3, 255]);
+      expect(strokeLayer.props.highlightedObjectIndex).toBe(0);
+      expect(strokeLayer.props.highlightColor).toEqual([4, 5, 6, 255]);
+    });
+
+    it('wires highlightedPointIndex/hoverFillColor to the point layer', () => {
+      const layers = buildRowLayers([], [row('a', createPoint(5, 5))], {
+        getDirtyPolygonRanges: noDirty,
+        getDirtyPointRanges: noDirty,
+        highlightedPointIndex: 0,
+        hoverFillColor: [1, 2, 3, 255]
+      });
+
+      const pointLayer = layers.find(l => l instanceof ScatterplotLayer) as ScatterplotLayer<RenderRow>;
+      expect(pointLayer.props.highlightedObjectIndex).toBe(0);
+      expect(pointLayer.props.highlightColor).toEqual([1, 2, 3, 255]);
+    });
+
+    it('defaults highlightedObjectIndex to null when nothing is hovered - not undefined, not -1', () => {
+      const layers = buildRowLayers(
+        [row('a', createBox(0, 0, 100, 100))],
+        [row('b', createPoint(5, 5))],
+        { getDirtyPolygonRanges: noDirty, getDirtyPointRanges: noDirty }
+      );
+
+      layers.forEach(l => {
+        // @ts-expect-error - accessing internal props for test purposes
+        expect(l.props.highlightedObjectIndex).toBeNull();
+      });
+    });
+
+    it('a polygon highlight never sets highlightedObjectIndex on the point layer, and vice versa', () => {
+      const layers = buildRowLayers(
+        [row('a', createBox(0, 0, 100, 100))],
+        [row('b', createPoint(5, 5))],
+        { getDirtyPolygonRanges: noDirty, getDirtyPointRanges: noDirty, highlightedPolygonIndex: 0, hoverFillColor: [1, 2, 3, 255] }
+      );
+
+      const pointLayer = layers.find(l => l instanceof ScatterplotLayer) as ScatterplotLayer<RenderRow>;
+      expect(pointLayer.props.highlightedObjectIndex).toBeNull();
+    });
+
+  });
+
 });

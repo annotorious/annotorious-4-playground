@@ -77,10 +77,11 @@ const VIEWPORT_SETTLE_MS = 500;
  * Annotation data lives in exactly two `RowStore`s (`polygonRows`,
  * `pointRows` - one deck.gl layer each), each a persistent,
  * densely-packed array where every annotation keeps a stable index across
- * edits (see row-store.ts). A store/draft mutation, a hover/selection
- * change, or a filter/style change all boil down to the same operation:
- * mutate the handful of rows that actually changed, then hand deck.gl the
- * (mostly unchanged) array back.
+ * edits (see row-store.ts). A store/draft mutation, a selection change, or a
+ * filter/style change all boil down to the same operation: mutate the
+ * handful of rows that actually changed, then hand deck.gl the (mostly
+ * unchanged) array back. Hover is the one exception - see `setHovered`'s doc
+ * for why it deliberately does *not* touch either `RowStore` at all.
  *
  * Both `polygonRows` and `pointRows` get the same treatment: that handoff
  * goes through deck.gl's own `_dataDiff` partial-update mechanism (see
@@ -193,18 +194,31 @@ export const createDeckRenderLoop = <Img>(
 
   const storeForType = (type: ShapeType) => type === ShapeType.POINT ? pointRows : polygonRows;
 
-  // Selected/hovered ids and their *actual* live state - the only place
-  // that ever flows real selected/hovered values into a style callback, so
-  // a row rebuilt for any other reason (a plain edit, a filter change)
-  // always resolves the correct, current state instead of accidentally
-  // baking in whatever happened to be true when it was last touched.
-  let currentHighlightStates: Map<string, AnnotationState> = new Map();
-  const stateFor = (id: string): AnnotationState => currentHighlightStates.get(id) || {};
+  // Selected ids - the only place that flows a real `{selected: true}` into
+  // a style callback, so a row rebuilt for any other reason (a plain edit, a
+  // filter change) always resolves the correct, current state instead of
+  // accidentally baking in whatever happened to be true when it was last
+  // touched. Hover is deliberately NOT part of this - see `setHovered`'s doc
+  // for why it's handled entirely separately, through deck.gl's own
+  // `highlightedObjectIndex` instead of a row rebuild.
+  let currentSelectedIds: Set<string> = new Set();
+  const stateFor = (id: string): AnnotationState => currentSelectedIds.has(id) ? { selected: true } : {};
 
   const resolveStyle = (target: SpatialAnnotationTarget, state: AnnotationState): Required<RenderStyle> => ({
     ...DEFAULT_STYLE,
     ...opts.getStyle?.(target, state)
   });
+
+  // The hovered annotation's id, shape type and resolved `{hovered: true}`
+  // style - resolved once in `setHovered`, then read as-is by `submitLayers`
+  // on every call (including ones triggered by something unrelated, e.g. an
+  // edit elsewhere) rather than recomputed each time, since none of it
+  // depends on anything that changes except a new hover. The row *index*
+  // specifically is the one piece that can't be cached alongside it - see
+  // `submitLayers`'s use of `RowStore.indexOf` for why.
+  let hoveredId: string | undefined;
+  let hoveredType: ShapeType | undefined;
+  let hoveredStyle: Required<RenderStyle> | undefined;
 
   const rowFor = (target: SpatialAnnotationTarget, state: AnnotationState): RenderRow => ({
     target,
@@ -224,9 +238,26 @@ export const createDeckRenderLoop = <Img>(
   // `ScatterplotLayer` - plain, non-composite layers - not the composite
   // `PolygonLayer`, which couldn't be trusted with this at all).
   const submitLayers = () => {
+    // Re-derived fresh on every call, never cached alongside `hoveredStyle`
+    // above: a row's index can shift due to a swap-with-last removal
+    // elsewhere (see row-store.ts) even while the *same* annotation stays
+    // hovered throughout, so a cached index can go stale without
+    // `hoveredId` itself ever changing. `RowStore.indexOf` is a plain Map
+    // lookup - negligible cost to redo every call.
+    const highlightedPolygonIndex = hoveredId !== undefined && hoveredType !== ShapeType.POINT
+      ? polygonRows.indexOf(hoveredId) ?? null
+      : null;
+    const highlightedPointIndex = hoveredId !== undefined && hoveredType === ShapeType.POINT
+      ? pointRows.indexOf(hoveredId) ?? null
+      : null;
+
     const layers = buildRowLayers(polygonRows.data(), pointRows.data(), {
       getDirtyPolygonRanges: polygonRows.consumeDirty,
-      getDirtyPointRanges: pointRows.consumeDirty
+      getDirtyPointRanges: pointRows.consumeDirty,
+      highlightedPolygonIndex,
+      highlightedPointIndex,
+      hoverFillColor: hoveredStyle?.fillColor,
+      hoverLineColor: hoveredStyle?.lineColor
     });
 
     deck.setProps({ layers: [...layers, ...hintLayersCache] });
@@ -369,24 +400,56 @@ export const createDeckRenderLoop = <Img>(
   }
 
   /**
-   * Call whenever the set of selected/hovered ids (and their state)
-   * changes. `states` carries the *actual* live state per id. Touches only
-   * the ids that were highlighted before, are highlighted now, or both -
-   * never the full candidate set - so a hover crossing shape boundaries
-   * stays cheap no matter how many annotations exist. Synchronous, not
-   * coalesced: `hover`/`selection` are nanostores atoms that already no-op
-   * a `.set()` of an unchanged value, so this only actually runs on a real
-   * boundary crossing, and even a burst of those is cheap for the same
-   * reason a single edit is.
+   * Call whenever the set of selected ids changes. Touches only the ids
+   * that were selected before, are selected now, or both - never the full
+   * candidate set - so this stays cheap regardless of total annotation
+   * count. Row-mutation-based (`upsertAnnotationRow`, same as an edit) - a
+   * real per-row cost, same as `layers.ts`'s module doc describes for
+   * `_dataDiff` in general, but an acceptable one here: selection only
+   * changes on a deliberate click, never on every pointermove the way hover
+   * does, so it doesn't need `setHovered`'s zero-row-touch treatment.
    */
-  const setHighlighted = (states: Map<string, AnnotationState>) => {
-    const touched = new Set<string>([...currentHighlightStates.keys(), ...states.keys()]);
-    currentHighlightStates = states;
+  const setSelected = (ids: readonly string[]) => {
+    const nextIds = new Set(ids);
+    const touched = new Set<string>([...currentSelectedIds, ...nextIds]);
+    currentSelectedIds = nextIds;
 
     touched.forEach(id => {
       const annotation = store.getAnnotation(id);
       if (annotation) upsertAnnotationRow(annotation);
     });
+
+    submitLayers();
+  }
+
+  /**
+   * Call whenever the hovered id changes. Unlike `setSelected`, this never
+   * touches `polygonRows`/`pointRows` at all - no `upsertAnnotationRow`, no
+   * `_dataDiff`, no `AttributeManager` invalidation - only a handful of
+   * closure variables plus `submitLayers()`, which hands deck.gl's own
+   * `highlightedObjectIndex`/`highlightColor` the hovered row's index and
+   * resolved style instead (see `layers.ts`'s "Hover" doc section for the
+   * full story, including the measured ~40fps -> ~57-59fps difference this
+   * made at 100k polygons). Worth the split specifically because hover fires
+   * on every pointermove crossing a shape boundary - far more often, in
+   * ordinary interactive use, than deliberate selection clicks or edits.
+   */
+  const setHovered = (id: string | null) => {
+    hoveredId = id ?? undefined;
+
+    const annotation = hoveredId ? store.getAnnotation(hoveredId) : undefined;
+    const image = annotation ? adapter.getImage(annotation.target.source) : undefined;
+
+    if (!annotation || !image) {
+      hoveredType = undefined;
+      hoveredStyle = undefined;
+      submitLayers();
+      return;
+    }
+
+    const target = adapter.targetToWorld(image, annotation.target);
+    hoveredType = target.selector.type;
+    hoveredStyle = resolveStyle(target, { hovered: true });
 
     submitLayers();
   }
@@ -532,7 +595,8 @@ export const createDeckRenderLoop = <Img>(
     notifyViewportChanged,
     refresh,
     render: fullRebuild,
-    setHighlighted,
+    setSelected,
+    setHovered,
     setHints,
     setVisible
   };

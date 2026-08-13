@@ -23,6 +23,11 @@ export const DEFAULT_STYLE: Required<RenderStyle> = {
   lineWidth: 2
 };
 
+// Only ever used while a `highlighted*Index` is actually set (i.e. something
+// really is hovered) - the exact value is irrelevant otherwise, so this is
+// just a harmless default, not a meaningful style choice.
+const FALLBACK_HIGHLIGHT_COLOR: [number, number, number, number] = [255, 255, 255, 255];
+
 /**
  * One renderable row: a world-space target plus its fully-resolved style.
  * Style is resolved once, up front, whenever a row is (re)written into a
@@ -163,6 +168,18 @@ export interface BuildRowLayerOptions {
   /** Typically `RowStore.consumeDirty` - see `dataDiffPropFor`'s doc for why this must be called lazily, not pre-computed. **/
   getDirtyPointRanges: () => DirtyRange[];
 
+  /** `RowStore.indexOf` result for the currently-hovered polygon row, or `null`/`undefined` if none - see the module doc's "Hover" section. **/
+  highlightedPolygonIndex?: number | null;
+
+  /** Same as `highlightedPolygonIndex`, for the point layer. **/
+  highlightedPointIndex?: number | null;
+
+  /** Fill color (and point fill+stroke color) to blend onto whichever row `highlightedPolygonIndex`/`highlightedPointIndex` points at - typically the hovered row's own resolved style, alpha 255 for a full replace. Ignored when the corresponding index is null. **/
+  hoverFillColor?: [number, number, number, number] | undefined;
+
+  /** Stroke color for the polygon layer's highlighted row - see `hoverFillColor`. **/
+  hoverLineColor?: [number, number, number, number] | undefined;
+
 }
 
 /**
@@ -208,6 +225,37 @@ export interface BuildRowLayerOptions {
  * `_dataDiff` - `shareDirtyReader` (see row-store.ts) ensures the first one
  * deck.gl actually diffs in a given reconciliation pass doesn't drain the
  * dirty state out from under the other.
+ *
+ * ## Hover
+ *
+ * Hover is rendered via deck.gl's own `highlightedObjectIndex`/
+ * `highlightColor` (every `Layer` supports these natively - no `pickable`,
+ * no GPU picking pass required, since the index is supplied externally from
+ * `render-loop.ts`'s own RBush-backed hit-test rather than deck.gl's) -
+ * *not* by mutating the hovered row's own `style`, unlike selection (still
+ * row-mutation-based, via `RenderRow.style` - see render-loop.ts's
+ * `setSelected`). This was a deliberate, measured change: mutating a row for
+ * every hover change means constructing a fresh layer instance whose `data`
+ * reference is unchanged (so `_dataDiff` correctly reports only that one
+ * row dirty) - correct, but still capped at ~40fps at 100k polygons in
+ * practice (measured), for reasons not fully explained even after the
+ * `PolygonLayer` fix above. Routing hover through `highlightedObjectIndex`
+ * instead - which touches no row data, no `_dataDiff`, no `AttributeManager`
+ * invalidation at all, just a per-layer prop - measured at ~57-59fps for the
+ * identical 100k-polygon workload, using deck.gl's own shader-side highlight
+ * blend (`picking_filterHighlightColor`: `mix(baseColor, highlightColor,
+ * highlightColor.a)`, i.e. alpha 255 = full replace, matching what
+ * `getStyle(target, {hovered: true})` used to do via row mutation) instead
+ * of touching GPU buffers at all. The remaining ~1-3fps gap versus points
+ * (which stay ~60fps either way) still isn't explained - likely the same
+ * unresolved layer-instantiation cost noted above, just smaller since no
+ * data reconciliation happens at all now.
+ *
+ * Only a single index can be highlighted this way (not an array), which is
+ * exactly right for hover (`hover.current` is always at most one id) but
+ * doesn't extend to multi-select selection - selection keeps the row-mutation
+ * path, which is fine given it only changes on deliberate clicks, not on
+ * every pointermove the way hover does.
  */
 export const buildRowLayers = <T extends SpatialAnnotationTarget>(
   polygonRows: readonly RenderRow<T>[],
@@ -229,7 +277,9 @@ export const buildRowLayers = <T extends SpatialAnnotationTarget>(
       pickable: false,
       filled: true,
       getPolygon: r => shapeToPolygonRing(r.target.selector),
-      getFillColor: r => r.style.fillColor
+      getFillColor: r => r.style.fillColor,
+      highlightedObjectIndex: opts.highlightedPolygonIndex ?? null,
+      highlightColor: opts.hoverFillColor ?? FALLBACK_HIGHLIGHT_COLOR
     }));
 
     layers.push(new PathLayer<RenderRow<T>>({
@@ -241,7 +291,9 @@ export const buildRowLayers = <T extends SpatialAnnotationTarget>(
       widthUnits: 'pixels',
       getPath: r => closedRing(shapeToPolygonRing(r.target.selector)),
       getColor: r => r.style.lineColor,
-      getWidth: r => r.style.lineWidth
+      getWidth: r => r.style.lineWidth,
+      highlightedObjectIndex: opts.highlightedPolygonIndex ?? null,
+      highlightColor: opts.hoverLineColor ?? FALLBACK_HIGHLIGHT_COLOR
     }));
   }
 
@@ -261,7 +313,9 @@ export const buildRowLayers = <T extends SpatialAnnotationTarget>(
       lineWidthUnits: 'pixels',
       radiusUnits: 'pixels',
       getRadius: pointRadiusMinPixels,
-      radiusMinPixels: pointRadiusMinPixels
+      radiusMinPixels: pointRadiusMinPixels,
+      highlightedObjectIndex: opts.highlightedPointIndex ?? null,
+      highlightColor: opts.hoverFillColor ?? FALLBACK_HIGHLIGHT_COLOR
     }));
   }
 

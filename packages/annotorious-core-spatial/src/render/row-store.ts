@@ -172,6 +172,16 @@ export const createRowStore = <Row>(idOf: (row: Row) => string) => {
       const idx = indexById.get(id);
       return idx === undefined ? undefined : rows[idx];
     },
+    /**
+     * A row's current array index - e.g. for deck.gl's `highlightedObjectIndex`
+     * (see layers.ts), which addresses instances by index, not id. Must be
+     * looked up fresh on every use, never cached across calls: swap-with-last
+     * `remove` (see module doc) can silently move a *different*, unrelated
+     * row into this row's old index, or move this row itself into a removed
+     * row's slot - either way, an index cached from an earlier call can go
+     * stale without the id itself ever changing.
+     */
+    indexOf: (id: string): number | undefined => indexById.get(id),
     upsert,
     upsertMany,
     remove,

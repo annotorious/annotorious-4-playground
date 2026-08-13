@@ -88,6 +88,31 @@ describe('row store', () => {
     expect(after).not.toBe(before);
   });
 
+  it('indexOf returns the current array index for a known id, undefined for an unknown one', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+    store.upsert('b', row('b'));
+
+    expect(store.indexOf('a')).toBe(0);
+    expect(store.indexOf('b')).toBe(1);
+    expect(store.indexOf('nope')).toBeUndefined();
+  });
+
+  it('indexOf reflects a swap-with-last move, for a row whose id never changed', () => {
+    // The exact case `render-loop.ts`'s `submitLayers` re-derives
+    // `highlightedObjectIndex` fresh every call instead of caching it for -
+    // 'c' moves from index 2 to index 0 here purely because 'a' was removed,
+    // with 'c' itself never touched.
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+    store.upsert('b', row('b'));
+    store.upsert('c', row('c'));
+
+    store.remove('a');
+
+    expect(store.indexOf('c')).toBe(0);
+  });
+
   it('removing an unknown id is a no-op', () => {
     const store = createRowStore<TestRow>(r => r.id);
     store.upsert('a', row('a'));

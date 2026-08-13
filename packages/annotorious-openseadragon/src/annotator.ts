@@ -142,20 +142,19 @@ export const createOSDAnnotator = <E = SpatialAnnotation>(
 
   // Selection/hover are their own state slices, separate from the store -
   // a style callback that reads `state.selected`/`state.hovered` (see
-  // getStyle above) needs the highlight layer refreshed whenever either
+  // getStyle above) needs the render layer refreshed whenever either
   // changes, or the shape keeps showing whatever style was last computed
   // before the change (e.g. still unselected-colored right after being
-  // selected). Routed through `setHighlighted`, not `render()` - hover
-  // fires on every mousemove, and a full re-render of every annotation on
-  // every hover change doesn't scale (see render-loop.ts's module doc).
-  const updateHighlighted = () => {
-    const states = new Map<string, AnnotationState>();
-    selection.selected.forEach(({ id }) => states.set(id, { selected: true }));
-    if (hover.current) states.set(hover.current, { ...states.get(hover.current), hovered: true });
-    deckOverlay.setHighlighted(states);
-  }
-  const unsubscribeSelection = selection.subscribe(updateHighlighted);
-  const unsubscribeHover = hover.subscribe(updateHighlighted);
+  // selected). Routed through `setSelected`/`setHovered`, not `render()` -
+  // and deliberately kept as two separate calls, not merged into one
+  // combined state map the way they used to be: hover fires on every
+  // mousemove crossing a shape boundary, far more often than a selection
+  // click, and `setHovered` takes a dedicated, much cheaper path through
+  // deck.gl's own `highlightedObjectIndex` instead of a row rebuild - see
+  // render-loop.ts's module doc for the full story (measured ~40fps ->
+  // ~57-59fps at 100k polygons from this split alone).
+  const unsubscribeSelection = selection.subscribe(() => deckOverlay.setSelected(selection.selected.map(s => s.id)));
+  const unsubscribeHover = hover.subscribe(id => deckOverlay.setHovered(id));
 
   const pointerHandling = createPointerHandling(viewer, state, imageRegistry, imageIndexes, draftStore, {
     ...(opts.multiSelect !== undefined ? { multiSelect: opts.multiSelect } : {}),

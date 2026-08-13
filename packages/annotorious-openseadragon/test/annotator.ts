@@ -21,6 +21,8 @@ const viewer = OpenSeadragon({
   gestureSettingsMouse: {
     clickToZoom: false
   },
+  minZoomLevel: 0.1,
+  maxZoomLevel: 100,
   // OSD defaults to preferring its own WebGL drawer for tiles
   // (['auto', 'webgl', 'canvas', 'html']) - stacking that on top of deck.gl's
   // own WebGL canvas means two independent WebGL contexts competing for the
@@ -69,6 +71,7 @@ const randomFillFor = (id: string): string => {
   return color;
 }
 
+// @ts-ignore
 anno.setStyle((annotation, state) => {
   if (state?.selected) return { fill: '#e8341a', fillOpacity: 0.4, stroke: '#e8341a', strokeWidth: 3 };
   if (state?.hovered) return { strokeWidth: 4 };
@@ -187,8 +190,8 @@ const generateAnnotations = (n: number): SpatialAnnotation[] => {
   const { x: width, y: height } = viewer.world.getItemAt(0).getContentSize();
 
   return Array.from({ length: n }, () => {
-    const w = 20 + Math.random() * 200;
-    const h = 20 + Math.random() * 200;
+    const w = 3 + Math.random() * 50;
+    const h = 3 + Math.random() * 30;
     const x = Math.random() * (width - w);
     const y = Math.random() * (height - h);
 

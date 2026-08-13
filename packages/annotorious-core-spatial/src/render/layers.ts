@@ -256,6 +256,30 @@ export interface BuildRowLayerOptions {
  * doesn't extend to multi-select selection - selection keeps the row-mutation
  * path, which is fine given it only changes on deliberate clicks, not on
  * every pointermove the way hover does.
+ *
+ * A session's *first* hover at 100k polygons still pays a real, measured,
+ * one-time cost (100,000 `getFillColor` calls) that every hover after it
+ * does not. An attempted fix (keeping `highlightedObjectIndex` permanently
+ * non-null via a fixed warm-up index, so deck.gl's picking-color buffer
+ * would already be allocated before the user's first real hover) was tried
+ * and reverted - direct A/B accessor-call-counting against the real 100k-row
+ * layers showed it made no measurable difference at all: reverting to the
+ * simple `?? null` form here reproduced the identical call pattern. The
+ * actual trigger, isolated by varying one prop at a time against the real
+ * shipped code, is `highlightColor`'s *value* changing between successive
+ * layer submissions (not `highlightedObjectIndex` going from null to
+ * non-null, which was the original, incorrect theory) - toggling the index
+ * between two rows while `highlightColor` stays byte-identical costs
+ * nothing on any call, but the first time `highlightColor` itself changes
+ * value (inevitable exactly once, going from "nothing hovered" to "the
+ * first real hover's resolved color") costs the full 100k-row recompute
+ * regardless of which index is involved. Not root-caused further - not
+ * an accessor-vs-uniform distinction confirmed against deck.gl's own
+ * source, just an empirically isolated trigger. Since almost all real
+ * hover styling resolves to the same color across different rows (as both
+ * this repo's demo and test harnesses do), this cost is paid at most once
+ * per session in practice, not per-hover - not worth a warm-up hack that
+ * measurably does nothing.
  */
 export const buildRowLayers = <T extends SpatialAnnotationTarget>(
   polygonRows: readonly RenderRow<T>[],

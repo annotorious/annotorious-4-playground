@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRowStore } from '../src/render/row-store';
+import { createRowStore, shareDirtyReader } from '../src/render/row-store';
 
 interface TestRow {
   id: string;
@@ -162,6 +162,49 @@ describe('row store', () => {
     expect(store.size()).toBe(0);
     expect(store.has('a')).toBe(false);
     expect(store.consumeDirty()).toEqual([]);
+  });
+
+});
+
+describe('shareDirtyReader', () => {
+
+  it('calls the underlying getter only once for multiple reads within the same synchronous pass', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+
+    const shared = shareDirtyReader(store.consumeDirty);
+
+    const first = shared();
+    const second = shared(); // a second "consumer" (e.g. a stroke layer's own _dataDiff) reading the same drain
+
+    expect(first).toEqual([{ startRow: 0, endRow: 1 }]);
+    expect(second).toBe(first); // exact same cached result, not re-computed (and not drained-to-empty)
+  });
+
+  it('computes fresh on the next microtask-separated pass, reflecting anything newly dirtied in between', async () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+
+    const shared = shareDirtyReader(store.consumeDirty);
+
+    shared(); // first "reconciliation pass" - drains the initial insert
+    await Promise.resolve(); // let the cache-clearing microtask run
+
+    store.upsert('a', row('a', 1)); // content-only edit - dirties index 0 again
+
+    expect(shared()).toEqual([{ startRow: 0, endRow: 1 }]); // fresh drain, not a stale empty cache
+  });
+
+  it('does not call the underlying getter until it is actually read', () => {
+    const store = createRowStore<TestRow>(r => r.id);
+    store.upsert('a', row('a'));
+
+    let calls = 0;
+    const shared = shareDirtyReader(() => { calls++; return store.consumeDirty(); });
+
+    expect(calls).toBe(0);
+    shared();
+    expect(calls).toBe(1);
   });
 
 });

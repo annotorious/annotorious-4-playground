@@ -11,22 +11,15 @@ export type RowStore<Row> = ReturnType<typeof createRowStore<Row>>;
 
 /**
  * A persistent, densely-packed, id-addressable array, used for both the
- * point and polygon row sets `render-loop.ts` maintains. Originally built
- * purely to feed deck.gl's `_dataDiff` partial-update mechanism (see
- * `layers.ts`): editing one row out of however many are stored costs
- * deck.gl exactly one row's worth of GPU work, not a full re-upload -
- * verified empirically (not just from the docs) to be a large speedup at
- * 100k-300k rows over rebuilding the array from scratch on every change.
- * That guarantee only holds as long as an untouched row's index never moves
- * - the entire point of this module - and, it turned out, only actually
- * holds for `ScatterplotLayer` (points): `PolygonLayer` was measured to
- * silently fail to visually apply a `_dataDiff`-reported partial update, so
- * `layers.ts` gives it a full recompute on every change instead (see that
- * file's module doc for the full story). This module still pays for
- * itself there too, independent of `_dataDiff`: stable indices and O(1)
- * upsert/remove avoid the old architecture's per-edit row/style
- * reconstruction, even though the GPU-side redraw for polygons is O(n)
- * again.
+ * point and polygon row sets `render-loop.ts` maintains, feeding deck.gl's
+ * `_dataDiff` partial-update mechanism (see `layers.ts`): editing one row
+ * out of however many are stored costs deck.gl exactly one row's worth of
+ * GPU work, not a full re-upload - verified empirically (not just from the
+ * docs, and not just for points - see `layers.ts`'s module doc for the
+ * `PolygonLayer` detour this took) to be a large speedup at 100k-300k rows
+ * over rebuilding the array from scratch on every change. That guarantee
+ * only holds as long as an untouched row's index never moves - the entire
+ * point of this module.
  *
  * Two different update strategies, chosen per call:
  *
@@ -158,4 +151,38 @@ export const createRowStore = <Row>(idOf: (row: Row) => string) => {
     consumeDirty
   };
 
+}
+
+/**
+ * Wraps a `RowStore.consumeDirty` (or any once-only "pull and clear" getter)
+ * so that several independent *consumers* reading it within the same
+ * deck.gl reconciliation pass all see the same result, instead of the first
+ * one draining it and leaving the rest with nothing.
+ *
+ * Needed specifically because polygon rows now feed two separate deck.gl
+ * layers - a `SolidPolygonLayer` for fill and a `PathLayer` for stroke, see
+ * `layers.ts` - both reading from the *same* `RowStore`. Each layer's own
+ * `_dataDiff` must still be called lazily (see `dataDiffPropFor`'s doc for
+ * why), so this can't just call `consumeDirty()` once up front either - that
+ * would reintroduce the exact discard-race the laziness exists to avoid.
+ * Instead, the *first* `_dataDiff` invocation in a reconciliation pass (fill
+ * or stroke, whichever deck.gl happens to diff first) drains and caches the
+ * result; a microtask - guaranteed to run only after deck.gl's own
+ * synchronous `layerManager.updateLayers()` has finished diffing every layer
+ * in the current pass, and before anything from a *later* pass can run -
+ * clears the cache again. Any further calls within the same pass reuse the
+ * cached value; a call from a later pass computes fresh.
+ */
+export const shareDirtyReader = (consumeDirty: () => DirtyRange[]): () => DirtyRange[] => {
+  let cached: DirtyRange[] | null = null;
+
+  return () => {
+    if (cached === null) {
+      const ranges = consumeDirty();
+      cached = ranges;
+      Promise.resolve().then(() => { cached = null; });
+      return ranges;
+    }
+    return cached;
+  };
 }

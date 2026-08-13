@@ -1,9 +1,10 @@
 import type { Layer } from '@deck.gl/core';
-import { PolygonLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { PathLayer, ScatterplotLayer, SolidPolygonLayer } from '@deck.gl/layers';
 import { boxCorners, ShapeType } from '../geometry';
 import type { Point, SpatialShape } from '../geometry';
 import type { SpatialAnnotationTarget } from '../model';
 import type { DirtyRange } from './row-store';
+import { shareDirtyReader } from './row-store';
 
 export interface RenderStyle {
 
@@ -46,6 +47,14 @@ const shapeToPolygonRing = (shape: SpatialShape): [number, number][] => {
   }
 }
 
+// `SolidPolygonLayer`'s fill triangulates an open or closed ring the same
+// way, but `PathLayer` draws exactly the segments it's given - an open ring
+// would leave the outline missing its last edge. `PolygonLayer` (which
+// internally uses both) closes this for you; using them separately means
+// doing it ourselves.
+const closedRing = (ring: [number, number][]): [number, number][] =>
+  ring.length > 0 ? [...ring, ring[0]!] : ring;
+
 const pointPosition = (shape: Point): [number, number] => [shape.geometry.x, shape.geometry.y];
 
 // Always reports "changed", regardless of whether `data`'s array reference
@@ -54,34 +63,33 @@ const pointPosition = (shape: Point): [number, number] => [shape.geometry.x, sha
 // default `newProps.data !== oldProps.data` reference check would see the
 // same array and conclude nothing changed, silently dropping the edit.
 // Paired with `_dataDiff` below, which is what keeps that "always changed"
-// cheap - see its own comment. Only used for `ScatterplotLayer` (points) -
-// see the module doc on `buildRowLayers` for why `PolygonLayer` doesn't use
-// this at all.
+// cheap - see its own comment.
 const alwaysChanged = () => false;
 
 /**
- * `getDirtyRanges` is `RowStore.consumeDirty` itself - passed through and
- * called *lazily*, exactly when (and only when) deck.gl actually invokes
- * `_dataDiff`, rather than pre-computed once when this layer instance is
- * constructed. That distinction matters and was the cause of a real bug:
- * `deck.setProps({ layers })` doesn't reconcile synchronously - it just
- * records the array for the *next* animation frame
- * (`LayerManager.setProps`/`_nextLayers`, verified in deck.gl's source).
- * Calling `submitLayers()` more than once before that frame arrives (a
- * dense hover sweep touching several different rows in quick succession;
- * several store writes landing in the same JS tick) constructs several
- * layer instances, of which only the *last* one deck.gl ever reconciles -
- * the rest, and whatever `_dataDiff` closure they were built with, are
- * simply discarded, never invoked. A closure that had already drained
- * `consumeDirty()` at construction time meant those discarded instances'
- * dirty rows were gone for good: correctly written into the row array, but
- * never reported to deck.gl, so the GPU-side attribute buffer was never
- * told to refresh them - visible as hover/selection styling that "trails"
- * stuck shapes behind a fast mouse sweep. Deferring the `consumeDirty()`
- * call to the moment deck.gl actually invokes `_dataDiff` fixes this:
- * whichever instance ends up being the one that's actually diffed
- * correctly reports *everything* dirtied since the last real reconcile,
- * no matter how many discarded instances happened in between.
+ * `getDirtyRanges` is `RowStore.consumeDirty` itself (typically wrapped in
+ * `shareDirtyReader` - see below) - passed through and called *lazily*,
+ * exactly when (and only when) deck.gl actually invokes `_dataDiff`, rather
+ * than pre-computed once when this layer instance is constructed. That
+ * distinction matters and was the cause of a real bug: `deck.setProps({
+ * layers })` doesn't reconcile synchronously - it just records the array for
+ * the *next* animation frame (`LayerManager.setProps`/`_nextLayers`,
+ * verified in deck.gl's source). Calling `submitLayers()` more than once
+ * before that frame arrives (a dense hover sweep touching several different
+ * rows in quick succession; several store writes landing in the same JS
+ * tick) constructs several layer instances, of which only the *last* one
+ * deck.gl ever reconciles - the rest, and whatever `_dataDiff` closure they
+ * were built with, are simply discarded, never invoked. A closure that had
+ * already drained `consumeDirty()` at construction time meant those
+ * discarded instances' dirty rows were gone for good: correctly written
+ * into the row array, but never reported to deck.gl, so the GPU-side
+ * attribute buffer was never told to refresh them - visible as
+ * hover/selection styling that "trails" stuck shapes behind a fast mouse
+ * sweep. Deferring the `consumeDirty()` call to the moment deck.gl actually
+ * invokes `_dataDiff` fixes this: whichever instance ends up being the one
+ * that's actually diffed correctly reports *everything* dirtied since the
+ * last real reconcile, no matter how many discarded instances happened in
+ * between.
  *
  * `newData !== oldData` (array *reference* inequality, not just length) is
  * *also* checked, using deck.gl's own `oldData` - the array it actually
@@ -98,12 +106,12 @@ const alwaysChanged = () => false;
  * covering an index whose *occupant* changed identity - not just value -
  * was measured to silently fail to visually update, even though the
  * reported range was technically accurate about which index changed
- * (a draft being replaced by its committed real shape at the same slot).
- * Reference inequality catches this correctly because `RowStore` already
- * guarantees the converse: the array reference only ever stays the same
- * across an unchanged-length, same-identity-at-every-index content
- * mutation - anything else, including a same-length swap, gets a fresh
- * reference.
+ * (a draft being replaced by its committed real shape at the same slot,
+ * or one row swap-removed into another's old slot). Reference inequality
+ * catches this correctly because `RowStore` already guarantees the
+ * converse: the array reference only ever stays the same across an
+ * unchanged-length, same-identity-at-every-index content mutation -
+ * anything else, including a same-length swap, gets a fresh reference.
  *
  * An empty array is a legitimate, cheap no-op (nothing dirty since the
  * last real diff). A non-empty `DirtyRange[]` tells deck.gl's
@@ -111,11 +119,12 @@ const alwaysChanged = () => false;
  * bytes for those row ranges, leaving everything else untouched. Verified
  * against deck.gl's actual source (not just the docs) to flow all the way
  * through to a partial `bufferSubData`-style write, and verified
- * empirically to be a large (measured 6-7x at 100k-300k rows, and more in
- * the real app once JS-side row-rebuild overhead is also accounted for)
- * speedup for a single-row content edit versus rebuilding the array from
- * scratch - for `ScatterplotLayer`. See the module doc on `buildRowLayers`
- * for why the same approach doesn't hold for `PolygonLayer`.
+ * empirically (real GPU, pixel-level screenshots) for both `ScatterplotLayer`
+ * (points) and `SolidPolygonLayer`/`PathLayer` (polygon fill/stroke) -
+ * *not* for the composite `PolygonLayer`, which silently fails to apply
+ * the same partial update despite wrapping the exact same sub-layers; see
+ * `buildRowLayers`'s doc for the full story of why polygons are built from
+ * `SolidPolygonLayer` + `PathLayer` directly instead of `PolygonLayer`.
  *
  * Note `_dataDiff` is an *experimental* deck.gl prop (their own docs mark
  * it as such) - not part of the semver-covered stable API, so it could
@@ -125,9 +134,9 @@ const alwaysChanged = () => false;
  * rows out of many, cheaply" use case, with no deprecation notice anywhere
  * in the current docs/changelog/upgrade guide as of this writing - so
  * treated here as a reasonably safe bet, not a guaranteed-stable one. If a
- * future deck.gl upgrade removes it, the fallback is exactly what
- * `PolygonLayer` already uses below: rebuild the full data array on every
- * change - correct, just back to O(n) per edit instead of O(1).
+ * future deck.gl upgrade removes it, the fallback is: rebuild the full data
+ * array on every change - correct, just back to O(n) per edit instead of
+ * O(1) (see git history for the pre-`_dataDiff` version of this file).
  */
 const dataDiffPropFor = (getDirtyRanges: () => DirtyRange[]) => ({
   // Cast: deck.gl declares `_dataDiff` generically over `LayerDataT`, but at
@@ -149,17 +158,21 @@ export interface BuildRowLayerOptions {
   pointRadiusMinPixels?: number;
 
   /** Typically `RowStore.consumeDirty` - see `dataDiffPropFor`'s doc for why this must be called lazily, not pre-computed. **/
+  getDirtyPolygonRanges: () => DirtyRange[];
+
+  /** Typically `RowStore.consumeDirty` - see `dataDiffPropFor`'s doc for why this must be called lazily, not pre-computed. **/
   getDirtyPointRanges: () => DirtyRange[];
 
 }
 
 /**
- * Builds (at most) one `PolygonLayer` for `polygonRows` and one
- * `ScatterplotLayer` for `pointRows` - deck.gl/the GPU handles culling
- * what's off-screen via the camera transform; this does no viewport culling
- * or level-of-detail simplification of its own on top of that.
+ * Builds the deck.gl layers for `polygonRows` and `pointRows` -
+ * `SolidPolygonLayer` (fill) + `PathLayer` (stroke) for the former,
+ * `ScatterplotLayer` for the latter. deck.gl/the GPU handles culling what's
+ * off-screen via the camera transform; this does no viewport culling or
+ * level-of-detail simplification of its own on top of that.
  *
- * Both layers are `pickable: false` - hit-testing goes through a spatial
+ * All layers are `pickable: false` - hit-testing goes through a spatial
  * index (see `AnnotationIndex.getAt`) against actual geometry, not GPU color
  * picking. This was measured, not assumed: a real `pickObject()` call
  * against 100k-300k pickable instances costs 15-42ms *regardless of how
@@ -169,40 +182,32 @@ export interface BuildRowLayerOptions {
  * scale, where the CPU spatial index answers the same query in well under a
  * millisecond.
  *
- * `pointRows` uses `_dataDiff` for genuine O(1)-per-edit partial updates
- * (see `dataDiffPropFor`'s doc). `polygonRows` deliberately does NOT: it
- * gets a fresh top-level array reference (`[...polygonRows]`) on every
- * call instead, with no `dataComparator`/`_dataDiff` at all, relying on
- * deck.gl's own default "data reference changed -> full recompute" path.
- * This was not the original design - `PolygonLayer` was first built with
- * the same `_dataDiff`-driven partial-update approach as `ScatterplotLayer`
- * above, and it was *wrong*: measured directly (real browser, real GPU,
- * pixel-level screenshots, not just accessor call counts or store state -
- * those all looked correct and were misleading) to silently fail to
- * visually update a row's geometry/color after a partial-range `_dataDiff`
- * report, even for the simplest possible case (editing one already-shaped
- * box's position, nothing else on the page). `ScatterplotLayer` - a plain
- * `Layer` with simple, fixed-size-per-instance attributes - handles the
- * exact same pattern correctly. The working theory (not fully confirmed
- * against deck.gl's source, given how much time chasing the partial-update
- * path already cost): `PolygonLayer` is a `CompositeLayer` wrapping
- * `SolidPolygonLayer`/`PathLayer`, whose vertex data is variable-width
- * (triangulated, point-count-per-row varies) rather than one fixed-size
- * slot per row - a composite layer's own decision to regenerate its
- * sub-layers' props appears to depend on something `dataComparator`
- * bypasses, so `_dataDiff`'s dirty ranges can end up correctly reported to
- * deck.gl but never actually reach the sub-layer that would act on them.
- * `[...polygonRows]` is a cheap O(n) *reference* copy (not a deep clone,
- * and RowStore's row objects themselves are reused) - real cost, measured
- * in the actual app: editing one box out of 100,000 drops from 60fps to
- * roughly 7-8fps, i.e. it's back to the pre-`RowStore` cost profile for
- * polygon/box edits specifically, though still cheaper than the original
- * architecture's full row-rebuild-with-object-reconstruction-and-restyling
- * per edit. Points are unaffected and keep the full O(1) benefit. A
- * `SolidPolygonLayer` + separate stroke `PathLayer` (bypassing the
- * `PolygonLayer` composite entirely, mirroring `hint-layers.ts`'s existing
- * split-layer pattern) is the likely path to recovering this for polygons
- * too, if it's worth the added complexity - not attempted here.
+ * Every layer here uses `_dataDiff` for genuine O(1)-per-edit partial
+ * updates (see `dataDiffPropFor`'s doc) - including polygons, which is
+ * notable given the history: this was *not* the first design. Polygon
+ * rendering was originally the composite `PolygonLayer` (`stroked: true,
+ * filled: true` in one call), still using `_dataDiff` the same way - and it
+ * was *wrong*: measured directly (real browser, real GPU, pixel-level
+ * screenshots, not just accessor call counts or store state, both of which
+ * looked correct and were misleading) to silently fail to visually apply a
+ * row's changed geometry/color, even for the simplest possible case
+ * (editing one already-shaped box's position, nothing else on the page).
+ * `ScatterplotLayer` (points) never had this problem. The difference turned
+ * out to be the composite layer itself, not the underlying triangulated
+ * geometry: `SolidPolygonLayer` and `PathLayer` - the two plain `Layer`s
+ * `PolygonLayer` wraps internally - each handle `_dataDiff` correctly on
+ * their own (verified the same way, including the swap-with-last identity
+ * case), it's specifically `PolygonLayer`'s composite-layer re-render
+ * gating that doesn't propagate a `_dataDiff`-only change down to its
+ * sub-layers' props. So polygons are built from the two sub-layers
+ * directly, bypassing the composite wrapper entirely - same visual result
+ * (a filled, stroked shape), same O(1)-per-edit cost as points.
+ *
+ * Fill and stroke are two independent deck.gl layers reading from the same
+ * `polygonRows`/dirty tracking, each with their own lazily-invoked
+ * `_dataDiff` - `shareDirtyReader` (see row-store.ts) ensures the first one
+ * deck.gl actually diffs in a given reconciliation pass doesn't drain the
+ * dirty state out from under the other.
  */
 export const buildRowLayers = <T extends SpatialAnnotationTarget>(
   polygonRows: readonly RenderRow<T>[],
@@ -214,17 +219,29 @@ export const buildRowLayers = <T extends SpatialAnnotationTarget>(
   const layers: Layer[] = [];
 
   if (polygonRows.length > 0) {
-    layers.push(new PolygonLayer<RenderRow<T>>({
-      id: 'annotations-shapes',
-      data: [...polygonRows],
+    const getDirtyPolygonRanges = shareDirtyReader(opts.getDirtyPolygonRanges);
+
+    layers.push(new SolidPolygonLayer<RenderRow<T>>({
+      id: 'annotations-shapes-fill',
+      data: polygonRows,
+      dataComparator: alwaysChanged,
+      ...dataDiffPropFor(getDirtyPolygonRanges),
       pickable: false,
-      stroked: true,
       filled: true,
       getPolygon: r => shapeToPolygonRing(r.target.selector),
-      getFillColor: r => r.style.fillColor,
-      getLineColor: r => r.style.lineColor,
-      getLineWidth: r => r.style.lineWidth,
-      lineWidthUnits: 'pixels'
+      getFillColor: r => r.style.fillColor
+    }));
+
+    layers.push(new PathLayer<RenderRow<T>>({
+      id: 'annotations-shapes-stroke',
+      data: polygonRows,
+      dataComparator: alwaysChanged,
+      ...dataDiffPropFor(getDirtyPolygonRanges),
+      pickable: false,
+      widthUnits: 'pixels',
+      getPath: r => closedRing(shapeToPolygonRing(r.target.selector)),
+      getColor: r => r.style.lineColor,
+      getWidth: r => r.style.lineWidth
     }));
   }
 

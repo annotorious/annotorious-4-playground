@@ -143,9 +143,17 @@ export const createPointerHandling = <E>(
 
     lastPointerEvent = event;
 
-    // Hover is suspended while anything is selected - see the guard on
-    // `selection` below for why.
-    if (!selection.isEmpty()) return;
+    // Hover is suspended while anything is selected (see the `selection`
+    // guard below) OR while the pointer is held down at all, selected or
+    // not: a click-drag with nothing selected pans/zooms the viewer,
+    // sweeping the cursor across whatever shapes lie along the way - without
+    // this, every one of those re-hit-tests and re-highlights, adding real
+    // per-frame cost on top of the pan itself, and looking wrong even at
+    // small scale (shapes flashing "hovered" as the cursor merely crosses
+    // them mid-pan, not actually pointing at anything). Hover is cleared up
+    // front in `onPointerDown`, not here, so it doesn't need re-checking on
+    // every move for the whole gesture.
+    if (!selection.isEmpty() || pointerDownAt) return;
 
     const hit = hitTestAt(eventToWorld(viewer, event));
     hover.set(hit ? hit.annotation : null);
@@ -171,7 +179,7 @@ export const createPointerHandling = <E>(
   // catches that. Hit-testing is a cheap, O(log n) spatial query - fine to
   // run on every viewport-change frame, unlike a full layer rebuild.
   const onUpdateViewport = () => {
-    if (!lastPointerEvent || activeTool || drawingEnabled || !selection.isEmpty()) return;
+    if (!lastPointerEvent || activeTool || drawingEnabled || !selection.isEmpty() || pointerDownAt) return;
     const hit = hitTestAt(eventToWorld(viewer, lastPointerEvent));
     hover.set(hit ? hit.annotation : null);
   }
@@ -200,6 +208,12 @@ export const createPointerHandling = <E>(
       const hovered = store.getAnnotation(hover.current);
       if (hovered) opts.onClickAnnotation?.(hovered, event);
     }
+
+    // Clear immediately, before it's known whether this turns into a click
+    // or a drag/pan - `onPointerMove`/`onUpdateViewport` stay suspended for
+    // as long as `pointerDownAt` is set (see their own guards), so nothing
+    // sets it again until the gesture ends and a fresh pointermove re-hits.
+    hover.set(null);
 
     if (drawingEnabled) {
       if (activeTool) {

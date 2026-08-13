@@ -44,6 +44,7 @@ fetch(IMAGE_INFO_URL)
 
     const [width, height] = options.size;
     const anno = createOLAnnotator(map, { width, height, multiSelect: true });
+    (window as any).__anno = anno;
 
     const log = document.getElementById('log') as HTMLDivElement;
     const line = (msg: string) => {

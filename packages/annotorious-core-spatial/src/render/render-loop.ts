@@ -82,41 +82,33 @@ const VIEWPORT_SETTLE_MS = 500;
  * mutate the handful of rows that actually changed, then hand deck.gl the
  * (mostly unchanged) array back.
  *
- * For `pointRows`, that handoff goes through deck.gl's own `_dataDiff`
- * partial-update mechanism (see `layers.ts`), which re-invokes accessors
- * and re-uploads GPU buffer bytes for only the changed rows - verified
- * (against deck.gl's actual source, not just the docs, and empirically
- * against a real GPU) to make a single-row edit cost the same regardless of
- * whether there are 1,000 or 300,000 other points on screen.
- *
- * `polygonRows` does NOT get the same treatment, and this is a deliberate,
- * measured tradeoff, not an oversight: `_dataDiff`-driven partial updates
- * were built for `PolygonLayer` too, and were wrong - verified (real
- * browser, real GPU, pixel-level screenshots) to silently fail to visually
- * apply a row's changed geometry/color, even for the simplest single-shape
- * edit. `layers.ts`'s module doc has the full story and the working theory
- * (a `CompositeLayer`-specific limitation, not something in this module's
- * control). `polygonRows` therefore always gets a full recompute - cheap to
- * *construct* (RowStore's O(1) bookkeeping and stable indices still avoid
- * the old architecture's per-edit row/style reconstruction), but O(n) for
- * deck.gl to actually redraw. Concretely: editing one box out of 100,000
- * runs at roughly 7-8fps, not the 60fps a point annotation gets under the
- * same edit. An ordinary drag - local *or* a remote collaborator's,
- * arriving as ordinary `Origin.REMOTE` store writes indistinguishable in
- * shape from a local edit - touches exactly one row either way:
- * `onStoreChange` re-resolves that one annotation's row synchronously, on
- * every single target update, with no debounce and no second "active"
- * layer to reconcile later - multiple people editing different *points* at
- * once costs O(number of concurrent edits); multiple people editing
- * different *polygons* at once costs O(concurrent edits × total polygon
- * count), same as the pre-rewrite architecture.
+ * Both `polygonRows` and `pointRows` get the same treatment: that handoff
+ * goes through deck.gl's own `_dataDiff` partial-update mechanism (see
+ * `layers.ts`), which re-invokes accessors and re-uploads GPU buffer bytes
+ * for only the changed rows - verified (against deck.gl's actual source,
+ * not just the docs, and empirically against a real GPU, pixel-level
+ * screenshots) to make a single-row edit cost the same regardless of
+ * whether there are 1,000 or 300,000 other annotations on screen. This
+ * took two attempts to get right for polygons specifically: the first
+ * version rendered them via the composite `PolygonLayer`, which reported
+ * correct dirty ranges but silently failed to ever apply them visually -
+ * `layers.ts`'s module doc has the full story. Polygons are built from
+ * `SolidPolygonLayer` (fill) + `PathLayer` (stroke) directly instead - the
+ * two plain, non-composite layers `PolygonLayer` wraps internally - which
+ * handle the exact same `_dataDiff` pattern correctly. An ordinary drag -
+ * local *or* a remote collaborator's, arriving as ordinary `Origin.REMOTE`
+ * store writes indistinguishable in shape from a local edit - touches
+ * exactly one row: `onStoreChange` re-resolves that one annotation's row
+ * synchronously, on every single target update, with no debounce and no
+ * second "active" layer to reconcile later. Multiple people editing
+ * different shapes at once therefore costs O(number of concurrent edits),
+ * not O(edits × annotation count) - true for points and polygons alike.
  *
  * This replaced an earlier design that hand-rolled a "base/active layer"
  * split plus a per-id settle-debounce timer specifically to avoid a full
- * rebuild on every edit - a problem `_dataDiff` solves natively for points,
- * more simply and dramatically faster at 100k-300k rows (measured); for
- * polygons it's a wash on raw redraw cost, but still simpler and removes
- * the settle-debounce lag (a remote collaborator's polygon edit is visible
+ * rebuild on every edit - a problem `_dataDiff` already solves natively,
+ * more simply and dramatically faster at 100k-300k rows (measured), with
+ * no settle-debounce lag (a remote collaborator's edit is visible
  * immediately, not up to 500ms later).
  *
  * `viewportIntersect` (the "visible annotations" lifecycle signal) is the
@@ -219,19 +211,21 @@ export const createDeckRenderLoop = <Img>(
     style: resolveStyle(target, state)
   });
 
-  // `getDirtyPointRanges` passes `consumeDirty` itself through to
-  // `buildRowLayers`, NOT its already-called result - deck.gl doesn't
-  // reconcile `deck.setProps({ layers })` synchronously, so several
+  // `getDirtyPolygonRanges`/`getDirtyPointRanges` pass `consumeDirty` itself
+  // through to `buildRowLayers`, NOT its already-called result - deck.gl
+  // doesn't reconcile `deck.setProps({ layers })` synchronously, so several
   // `submitLayers()` calls in a row (e.g. a fast hover sweep, or several
   // store writes in one tick) construct several layer instances of which
   // only the last is ever actually diffed; draining `consumeDirty()` here
   // eagerly would silently lose whatever was dirtied by the discarded ones.
-  // Only `pointRows` uses this at all - `polygonRows` always gets a full
-  // rebuild, so its own dirty tracking (still maintained by RowStore, just
-  // unread here) isn't consulted. See `dataDiffPropFor`'s and
-  // `buildRowLayers`'s doc in layers.ts for the full explanation of both.
+  // See `dataDiffPropFor`'s and `buildRowLayers`'s doc in layers.ts for the
+  // full explanation, including why polygons need this exactly as much as
+  // points do now (both go through `SolidPolygonLayer`/`PathLayer`/
+  // `ScatterplotLayer` - plain, non-composite layers - not the composite
+  // `PolygonLayer`, which couldn't be trusted with this at all).
   const submitLayers = () => {
     const layers = buildRowLayers(polygonRows.data(), pointRows.data(), {
+      getDirtyPolygonRanges: polygonRows.consumeDirty,
       getDirtyPointRanges: pointRows.consumeDirty
     });
 

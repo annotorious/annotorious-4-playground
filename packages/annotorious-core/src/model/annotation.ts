@@ -16,9 +16,15 @@ export interface Annotation {
 
 }
 
-export interface AnnotationTarget {
+export interface RuntimeAnnotation extends Omit<Annotation, 'target' | 'bodies'> {
 
-  annotation: string;
+  target: RuntimeAnnotationTarget;
+
+  bodies: RuntimeAnnotationBody[];
+
+}
+
+export interface AnnotationTarget {
 
   selector: AbstractSelector;
 
@@ -32,19 +38,21 @@ export interface AnnotationTarget {
 
 }
 
+export interface RuntimeAnnotationTarget extends AnnotationTarget {
+
+  _annotation: string;
+
+}
+
 export interface AbstractSelector { }
 
 export interface AnnotationBody {
 
-  id: string;
-
-  annotation: string;
-
-  type?: string;
+  id?: string;
 
   purpose?: typeof PurposeValues[number] | string & {};
 
-  value?: string;
+  value?: any;
 
   creator?: User;
 
@@ -53,6 +61,14 @@ export interface AnnotationBody {
   updatedBy?: User;
 
   updated?: Date;
+
+}
+
+export interface RuntimeAnnotationBody extends Omit<AnnotationBody, 'id'> {
+
+  id: string;
+
+  _annotation: string;
 
 }
 

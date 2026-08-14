@@ -6,33 +6,27 @@ Work in progress on a rewrite of Annotorious.
 
 - [ ] `packages/annotorious-core/`
   - [ ] `src/`
-    - [ ] `index.ts`
     - [ ] `lifecycle/`
-      - [ ] `index.ts`
-      - [ ] `lifecycle-events.ts`
+      - [x] `lifecycle-events.ts`
       - [ ] `lifecycle.ts`
-    - [ ] `model/`
-      - [ ] `annotation-state.ts`
-      - [ ] `annotation.ts`
-      - [ ] `annotator.ts`
-      - [ ] `drawing-style.ts`
-      - [ ] `filter.ts`
-      - [ ] `format-adapter.ts`
-      - [ ] `index.ts`
-      - [ ] `user.ts`
-      - [ ] `w3c-annotation.ts`
+    - [x] `model/`
+      - [x] `annotation-state.ts`
+      - [x] `annotation.ts`
+      - [x] `annotator.ts`
+      - [x] `filter.ts`
+      - [x] `format-adapter.ts`
+      - [x] `user.ts`
+      - [x] `w3c-annotation.ts`
     - [ ] `state/`
-      - [ ] `hover.ts`
-      - [ ] `index.ts`
+      - [x] `hover.ts`
       - [ ] `selection.ts`
       - [ ] `store-observer.ts`
       - [ ] `store.ts`
       - [ ] `undo-stack.ts`
-      - [ ] `viewport.ts`
+      - [x] `viewport.ts`
     - [ ] `utils/`
       - [ ] `annotation-utils.ts`
-      - [ ] `diff-annotations.ts`
-      - [ ] `index.ts`
+      - [x] `diff-annotations.ts`
   - [ ] `test/`
     - [ ] `lifecycle.test.ts`
     - [ ] `store.test.ts`

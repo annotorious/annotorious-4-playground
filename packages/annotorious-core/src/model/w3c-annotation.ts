@@ -1,4 +1,4 @@
-import type { Annotation, AnnotationBody } from './annotation';
+import type { Annotation, AnnotationBody, RuntimeAnnotationBody } from './annotation';
 
 /**
  * The generic (selector-agnostic) shape of a W3C Web Annotation. Media-specific
@@ -113,9 +113,9 @@ export const parseW3CBodies = (
 });
 
 /** Serialization helper to remove core-specific fields from the annotation body. **/
-export const serializeW3CBodies = (bodies: AnnotationBody[]): W3CAnnotationBody[] =>
+export const serializeW3CBodies = (bodies: (AnnotationBody | RuntimeAnnotationBody)[]): W3CAnnotationBody[] =>
   bodies.map(b => {
-    const { annotation: _annotation, created, updated, ...rest } = b;
+    const { created, updated, _annotation, ...rest } = b as typeof b & { _annotation?: unknown };
 
     const w3cBody: W3CAnnotationBody = {
       ...rest,

@@ -1,39 +1,19 @@
 import { dequal } from 'dequal/lite';
-import type { Annotation, AnnotatorState, FormatAdapter } from '../model';
+import type { AnnotatorState, FormatAdapter, RuntimeAnnotation } from '../model';
 import { Origin } from '../state';
 import type { UndoStack } from '../state';
 import type { LifecycleEvents } from './lifecycle-events';
 
-export type Lifecycle<I extends Annotation, E extends unknown> = ReturnType<typeof createLifecycleObserver<I, E>>;
+export type Lifecycle<I extends RuntimeAnnotation, E extends unknown> = ReturnType<typeof createLifecycleObserver<I, E>>;
 
 // How long to wait for inactivity before flushing pending target changes.
-// Unconditional - see module doc below for why this can't be opt-in.
 const UPDATE_DEBOUNCE_MS = 1000;
 
 /**
  * Bridges the low-level store/selection/hover/viewport state onto the public,
- * high-level `LifecycleEvents` an annotator emits.
- *
- * Most events (create/delete/hover/viewport/selection) map through directly.
- * `updateAnnotation` is the one with real policy behind it: body edits
- * (comments, tags, ...) are discrete, deliberate actions and get reported
- * immediately, but target changes (drag/resize) happen as a stream of many
- * small store updates during a single gesture - reporting each one would be
- * event spam. Those are batched: the annotation's state right before the
- * gesture started is remembered in `pending`, and compared against its
- * current state once the gesture is clearly over - either the annotation is
- * deselected, *or* (unconditionally, not behind an opt-in flag) the user has
- * paused for `UPDATE_DEBOUNCE_MS`. That second path used to be gated behind
- * an `autoSave` option (ported from v3, which had the exact same gate) -
- * removed, because gating it meant a host that never turns `autoSave` on
- * (the default) never hears about a completed drag/resize until the user
- * happens to deselect, which could be never. That's precisely the "always
- * fire, independently of selection, and simply debounce fast changes"
- * behavior https://github.com/annotorious/annotorious/issues/566 asked for -
- * deselect is still an equally-valid, *faster* way to flush early, it's just
- * no longer the only way.
+ * high-level CRUD events that the annotator emits.
  */
-export const createLifecycleObserver = <I extends Annotation, E extends unknown>(
+export const createLifecycleObserver = <I extends RuntimeAnnotation, E extends unknown>(
   state: AnnotatorState<I, E>,
   undoStack: UndoStack<I>,
   adapter?: FormatAdapter<I, E>

@@ -1,14 +1,14 @@
-import type { Annotation } from './annotation';
-import type { User } from './user';
-import { createAnonymousGuest } from './user';
-import type { DrawingStyleExpression } from './drawing-style';
+import type { Annotation, RuntimeAnnotation } from './annotation';
 import type { Filter } from './filter';
 import { type FormatAdapter, parseAll } from './format-adapter';
+import type { LifecycleEvents } from '../lifecycle';
+import { createAnonymousUser } from './user';
+import type { User } from './user';
+import { reviveDates } from '../utils';
 import {
   createHoverState,
   createSelectionState,
   createStore,
-  createUndoStack,
   createViewportState,
   Origin
 } from '../state';
@@ -21,15 +21,8 @@ import type {
   UserSelectActionExpression,
   ViewportState
 } from '../state';
-import type { LifecycleEvents } from '../lifecycle';
-import { reviveDates } from '../utils';
 
-/**
- * Base annotator interface, implemented by every media-specific annotator
- * (OpenSeadragon, OpenLayers, ...). `I` is the internal core data model,
- * `E` is the externally-facing (typically format-adapted) representation.
- */
-export interface Annotator<I extends Annotation = Annotation, E extends unknown = Annotation> {
+export interface Annotator<I extends RuntimeAnnotation = RuntimeAnnotation, E extends unknown = Annotation> {
 
   addAnnotation(annotation: Partial<E>): void;
 
@@ -65,8 +58,6 @@ export interface Annotator<I extends Annotation = Annotation, E extends unknown 
 
   setSelected(arg?: string | string[], editable?: boolean): void;
 
-  setStyle(style: DrawingStyleExpression<I> | undefined): void;
-
   setUser(user: User): void;
 
   setUserSelectAction(action: UserSelectActionExpression<E>): void;
@@ -83,7 +74,7 @@ export interface Annotator<I extends Annotation = Annotation, E extends unknown 
 
 }
 
-export interface AnnotatorState<I extends Annotation, E extends unknown> {
+export interface AnnotatorState<I extends RuntimeAnnotation, E extends unknown> {
 
   store: Store<I>;
 
@@ -103,8 +94,7 @@ export interface AnnotatorOpts<I extends Annotation, E extends unknown> {
 
 }
 
-/** Creates the generic {store, selection, hover, viewport} state bundle every annotator needs. **/
-export const createAnnotatorState = <I extends Annotation, E extends unknown>(
+export const createAnnotatorState = <I extends RuntimeAnnotation, E extends unknown>(
   opts: AnnotatorOpts<I, E> = {}
 ): AnnotatorState<I, E> => {
   const store = createStore<I>();
@@ -117,20 +107,13 @@ export const createAnnotatorState = <I extends Annotation, E extends unknown>(
   };
 }
 
-/**
- * Implements the media-independent part of the `Annotator` contract: data
- * CRUD, selection and undo/redo. Rendering-dependent parts (`setFilter`,
- * `setStyle`, `destroy`, lifecycle `on`/`off`, ...) are the responsibility of
- * the concrete (media-specific) annotator, since core has no renderer to push
- * those into.
- */
-export const createBaseAnnotator = <I extends Annotation, E extends unknown>(
+// Media-independent base annotator
+export const createBaseAnnotator = <I extends RuntimeAnnotation, E extends unknown>(
   state: AnnotatorState<I, E>,
   undoStack: UndoStack<I>,
   adapter?: FormatAdapter<I, E>,
-  initialUser: User = createAnonymousGuest()
+  initialUser: User = createAnonymousUser()
 ) => {
-
   const { store, selection } = state;
 
   let currentUser = initialUser;
@@ -242,8 +225,6 @@ export const createBaseAnnotator = <I extends Annotation, E extends unknown>(
     }
   }
 
-  // Note: we don't spread the undoStack - it has a `.destroy()` method that
-  // would silently get overwritten by other Annotator implementations otherwise.
   return {
     addAnnotation,
     cancelSelected,

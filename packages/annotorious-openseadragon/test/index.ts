@@ -20,8 +20,8 @@ const fpsLabel = document.getElementById('fps') as HTMLSpanElement;
 
 const generateShapes = (n: number) =>
   Array.from({ length: n }, () => {
-    const w = 1 + Math.random() * 20;
-    const h = 1 + Math.random() * 15;
+    const w = 1 + Math.random() * 8;
+    const h = 1 + Math.random() * 6;
     const x = Math.random() * (IMAGE_WIDTH - w);
     const y = Math.random() * (IMAGE_HEIGHT - h);
 

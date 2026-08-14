@@ -1,5 +1,5 @@
 import { createNanoEvents, type Unsubscribe } from 'nanoevents';
-import type { Annotation } from '../model';
+import type { Annotation, RuntimeAnnotation } from '../model';
 import type { Store } from './store';
 import { mergeChanges, Origin } from './store-observer';
 import type { ChangeSet, StoreChangeEvent, Update } from './store-observer';
@@ -8,7 +8,7 @@ import type { ChangeSet, StoreChangeEvent, Update } from './store-observer';
 // undo step, rather than getting pushed as a new one (e.g. while dragging).
 const DEBOUNCE = 250;
 
-export interface UndoStack<T extends Annotation> {
+export interface UndoStack<T extends RuntimeAnnotation> {
 
   canRedo(): boolean;
 

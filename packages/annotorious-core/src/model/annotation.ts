@@ -4,6 +4,9 @@ export interface Annotation {
 
   id: string;
 
+  // Small difference in spirit to W3C thinking: annotations always
+  // have ONE target. Annotating multiple shapes is something you'd handle
+  // inside the selector, which is media-dependent and entirely extensible.
   target: AnnotationTarget;
 
   bodies: AnnotationBody[];
@@ -38,13 +41,16 @@ export interface AnnotationTarget {
 
 }
 
+export interface AbstractSelector { }
+
 export interface RuntimeAnnotationTarget extends AnnotationTarget {
 
+  // Internally, targets always point back to their parent
+  // annotation. The store will enforce consistency, even if users
+  // pass in an invalid value here.
   _annotation: string;
 
 }
-
-export interface AbstractSelector { }
 
 export interface AnnotationBody {
 
@@ -66,8 +72,10 @@ export interface AnnotationBody {
 
 export interface RuntimeAnnotationBody extends Omit<AnnotationBody, 'id'> {
 
+  // Interally, bodies always have an ID (because there are multiple per annotation)
   id: string;
 
+  // Points back to parent - same as for targets
   _annotation: string;
 
 }
